@@ -56,11 +56,14 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: HIGH,CRITICAL
+          # In SARIF mode the action reports all severities unless told
+          # otherwise; without this the exit code fires on LOW/MEDIUM too.
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
       - name: Upload scan results
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
       - name: Log in to ghcr.io
