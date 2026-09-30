@@ -41,6 +41,14 @@ jobs:
           context: .
           load: true
           tags: ${{ env.IMAGE }}:scan
+      - name: Trivy report (table, for the job log)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:scan
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
       - name: Trivy scan (fail on HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
