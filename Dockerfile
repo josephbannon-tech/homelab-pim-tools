@@ -6,6 +6,12 @@ COPY src ./src
 RUN pip install --no-cache-dir --prefix=/install .
 
 FROM python:3.12-slim
+# Apply Debian security updates at build time: the slim base lags its own
+# security tracker by days (first build: 6 HIGH in libssl3, fixed upstream),
+# and the Trivy gate in CI fails the image otherwise.
+RUN apt-get update \
+ && apt-get -y --no-install-recommends upgrade \
+ && rm -rf /var/lib/apt/lists/*
 # Non-root, read-only rootfs friendly (nothing is written at runtime).
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin pim
 COPY --from=build /install /usr/local
