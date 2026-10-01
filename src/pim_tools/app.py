@@ -23,6 +23,7 @@ from .models import (
     TaskList,
 )
 from .store import NotFound, Store
+from .telemetry import configure as configure_telemetry
 
 app = FastAPI(
     title="pim-tools",
@@ -149,3 +150,5 @@ def add_event(req: AddEventRequest, store: Store = Depends(get_store)) -> AddEve
 
 
 _ = Event  # re-exported for type checkers
+
+TRACING = configure_telemetry(app)

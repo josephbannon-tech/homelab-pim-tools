@@ -30,6 +30,10 @@ The OpenAPI document at `/openapi.json` is the integration surface. Open WebUI r
 - **Symptom:** the Radicale endpoint answered 200 but the blackbox-exporter probe that would watch it reported failure. **Root cause:** Radicale's built-in server speaks HTTP/1.0 and the default `http_2xx` module only accepts 1.1 and 2.0. **Fix:** a dedicated probe module with `HTTP/1.0` in `valid_http_versions` (in the gitops repo). This server itself runs under uvicorn and answers HTTP/1.1, so its own probe uses the default module.
 - **Symptom:** `ruff` flagged every FastAPI handler (`B008`, function call in argument default). **Root cause:** `Depends()` and `Query()` in defaults are the framework's contract, which bugbear cannot know. **Fix:** `extend-immutable-calls` for those two, rather than disabling the rule.
 
+## Tracing
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector.monitoring.svc:4318`) and every tool call becomes a server span in Tempo under `service.name=pim-tools`, with `/health` excluded. Unset, the SDK is never initialised, so tests and local runs stay silent. In the homelab this is the second OTLP producer after the NAS media pipeline, and the first in-cluster one.
+
 ## Running it
 
 ```bash
@@ -55,5 +59,6 @@ Part of a single-node homelab run as production-shape infrastructure: GitOps wit
 ## Roadmap
 
 - Per-user identity (a second household member with chat access).
+- Child spans for the CalDAV round trips (the `caldav` client sits on niquests, which is not auto-instrumented).
 - Contacts (`list_contacts`, `add_contact`) over CardDAV on the same principal.
 - Notes tools over a Syncthing-replicated markdown vault (`read_note`, `append_note`), once the vault exists.

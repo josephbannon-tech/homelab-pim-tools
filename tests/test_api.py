@@ -85,3 +85,10 @@ def test_memory_store_date_helpers():
     s.add_event("A", datetime(2026, 1, 1, 9, tzinfo=UTC), None, None)
     assert s.list_events(datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC))
     assert s.add_task("l", "t", date(2026, 1, 1))[1]
+
+
+def test_tracing_off_without_endpoint(monkeypatch):
+    from pim_tools import telemetry
+
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert telemetry.configure(app) is False

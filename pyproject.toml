@@ -1,6 +1,6 @@
 [project]
 name = "pim-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Deterministic tool server over a CalDAV store (Radicale) for LLM front ends such as Open WebUI."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,6 +10,9 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   "caldav>=1.4",
   "icalendar>=6",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
 ]
 
 [project.optional-dependencies]
