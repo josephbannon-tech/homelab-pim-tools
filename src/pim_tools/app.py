@@ -9,8 +9,10 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi_mcp import FastApiMCP
 
 from . import __version__
+from .auth import BearerAuth
 from .models import (
     AddEventRequest,
     AddEventResult,
@@ -150,5 +152,12 @@ def add_event(req: AddEventRequest, store: Store = Depends(get_store)) -> AddEve
 
 
 _ = Event  # re-exported for type checkers
+
+# Second door: the same five operations as MCP tools (Streamable HTTP at /mcp),
+# generated from the routes above so there is one definition of each tool.
+# Mounted after the routes, which fastapi-mcp reads at construction time.
+FastApiMCP(app, name="pim-tools").mount_http()
+# One gate for both doors; a no-op until PIM_TOOLS_TOKEN is set.
+app.add_middleware(BearerAuth)
 
 TRACING = configure_telemetry(app)

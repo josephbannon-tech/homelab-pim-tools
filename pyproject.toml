@@ -1,6 +1,6 @@
 [project]
 name = "pim-tools"
-version = "0.2.0"
+version = "0.3.0"
 description = "Deterministic tool server over a CalDAV store (Radicale) for LLM front ends such as Open WebUI."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,6 +13,10 @@ dependencies = [
   "opentelemetry-sdk>=1.27",
   "opentelemetry-exporter-otlp-proto-http>=1.27",
   "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "fastapi-mcp>=0.4,<0.5",
+  # fastapi-mcp 0.4 calls the SDK's Server(name, description) constructor,
+  # which mcp 2.x removed; lift the ceiling when fastapi-mcp supports 2.x.
+  "mcp>=1.12,<2",
 ]
 
 [project.optional-dependencies]
