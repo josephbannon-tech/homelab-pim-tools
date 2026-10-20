@@ -1,6 +1,6 @@
 [project]
 name = "pim-tools"
-version = "0.3.0"
+version = "0.3.1"
 description = "Deterministic tool server over a CalDAV store (Radicale) for LLM front ends such as Open WebUI."
 readme = "README.md"
 requires-python = ">=3.12"
