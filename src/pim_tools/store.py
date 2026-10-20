@@ -42,6 +42,14 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+def _utc(dt: datetime) -> datetime:
+    """Normalise to UTC before anything is serialised. A fixed-offset tzinfo
+    (what an ISO string like 2026-10-22T10:00:00+01:00 parses to) would otherwise
+    be written as DTSTART;TZID="+01:00", which names no VTIMEZONE and leaves each
+    client to guess. UTC serialises as a plain ...Z stamp that every client reads."""
+    return _aware(dt).astimezone(UTC)
+
+
 # --------------------------------------------------------------------------- memory
 
 
@@ -183,8 +191,8 @@ class CalDAVStore:
         self, title: str, start: datetime, end: datetime | None, notes: str | None
     ) -> tuple[Event, bool]:
         cal = self._calendar(self._event_calendar_name)
-        start = _aware(start)
-        end = _aware(end) if end else start + timedelta(hours=1)
+        start = _utc(start)
+        end = _utc(end) if end else start + timedelta(hours=1)
         for e in self.list_events(start - timedelta(minutes=1), start + timedelta(minutes=1)):
             if _norm(e.title) == _norm(title) and e.start == start:
                 return e, False
