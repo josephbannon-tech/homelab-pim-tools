@@ -42,3 +42,5 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The eval harness lives beside the package, not in it (it is not shipped).
+pythonpath = ["."]
