@@ -85,9 +85,11 @@ class RecordingStore(MemoryStore):
         call.changed = not already
         return task
 
-    def list_events(self, start: datetime, end: datetime) -> list[Event]:
-        self._record("list_events", {"from": start, "to": end})
-        return super().list_events(start, end)
+    def list_events(
+        self, start: datetime, end: datetime, calendar: str | None = None
+    ) -> list[Event]:
+        self._record("list_events", {"from": start, "to": end, "calendar": calendar or "personal"})
+        return super().list_events(start, end, calendar)
 
     def add_event(
         self, title: str, start: datetime, end: datetime | None, notes: str | None
@@ -126,6 +128,7 @@ def seeded_store(seed: dict[str, Any]) -> RecordingStore:
                 start=datetime.fromisoformat(ev["start"]),
                 end=datetime.fromisoformat(ev["end"]) if ev.get("end") else None,
                 notes=ev.get("notes"),
+                calendar=ev.get("calendar", "personal"),
             )
         )
     return store

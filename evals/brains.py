@@ -281,6 +281,8 @@ class OracleBrain:
                     "from": (at - timedelta(hours=1)).isoformat(),
                     "to": (at + timedelta(hours=1)).isoformat(),
                 }
+                if args.get("calendar"):
+                    window["calendar"] = args["calendar"]
                 httpx.get(f"{self.url}/events", params=window)
             elif tool == "add_event":
                 httpx.post(f"{self.url}/events", json=args).raise_for_status()

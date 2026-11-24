@@ -43,6 +43,7 @@ class Event(BaseModel):
     start: datetime
     end: datetime | None = None
     notes: str | None = None
+    calendar: str = Field(default="personal", description="Which calendar the event is on.")
 
 
 class EventList(BaseModel):
