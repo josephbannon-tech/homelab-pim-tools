@@ -27,7 +27,7 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 - **One principal, calendars addressed by URL leaf.** Radicale exposes `/user/shopping/`, `/user/chores/`, `/user/personal/`. The leaf name is what the phone apps show, so it is the name the model uses. Display names are not trusted for lookup.
 - **Store behind a `Protocol`, tested twice.** The HTTP layer is tested against an in-memory store (fast, no server). The CalDAV store has a separate round-trip test that runs only when `RADICALE_URL` is set, so CI stays hermetic and the live behaviour is still checked before a release.
 - **MCP generated from the OpenAPI routes, not written twice.** fastapi-mcp turns each route into a tool named after its `operationId`, with the descriptions and schemas the OpenAPI door already exposes, and invokes the route in-process with the caller's bearer forwarded. A hand-written MCP server would be a second copy of the tool contract, and copies drift.
-- **A shared-secret bearer token, not identity.** v1 had no auth and stayed on a ClusterIP for that reason. The token (v0.3) lets the service sit on a NodePort for an MCP client on another host without letting anything else on the LAN write to the calendar. It says a caller is trusted, not who they are: per-user identity, which a second person with chat access needs, is still the roadmap's first item. The gate is a pure ASGI middleware because Starlette's `BaseHTTPMiddleware` buffers response bodies and the MCP transport streams.
+- **A shared-secret bearer token, not identity.** v1 had no auth and stayed on a ClusterIP for that reason. The token (v0.3) lets the service sit on a NodePort for an MCP client on another host without letting anything else on the LAN write to the calendar. It says a caller is trusted, not who they are, which is all a single-user tool needs. The gate is a pure ASGI middleware because Starlette's `BaseHTTPMiddleware` buffers response bodies and the MCP transport streams.
 - **Image built in CI and pinned by digest downstream.** The homelab has no registry, so GitHub Actions builds the image, Trivy scans it (HIGH/CRITICAL fail the build, unfixed ignored), and pushes to GHCR. The deployment repo references the image by digest, so a rebuild never changes what runs without a reviewed commit.
 
 ## Lessons learned
@@ -78,7 +78,6 @@ Part of a single-node homelab run as production-shape infrastructure: GitOps wit
 
 ## Roadmap
 
-- Per-user identity (a second household member with chat access).
 - Child spans for the CalDAV round trips (the `caldav` client sits on niquests, which is not auto-instrumented).
 - Contacts (`list_contacts`, `add_contact`) over CardDAV on the same principal.
 - Notes tools over a Syncthing-replicated markdown vault (`read_note`, `append_note`), once the vault exists.

@@ -1,6 +1,6 @@
 # Eval set
 
-Thirty scripted chat turns that decide whether a model is safe to put in front of the family calendar and task lists. It gates two changes: giving a second person chat access, and swapping the model behind the chat.
+Thirty scripted chat turns that decide whether a model is safe to put in front of the family calendar and task lists. It gates one change: swapping the model behind the chat.
 
 ```bash
 pip install -e ".[dev]"
