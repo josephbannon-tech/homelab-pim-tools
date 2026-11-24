@@ -17,7 +17,15 @@ from pim_tools.app import app, get_store
 from pim_tools.store import MemoryStore
 
 TOKEN = "test-token"
-TOOLS = {"list_tasks", "add_task", "complete_task", "list_events", "add_event"}
+TOOLS = {
+    "list_tasks",
+    "add_task",
+    "complete_task",
+    "list_events",
+    "add_event",
+    "change_event",
+    "cancel_event",
+}
 
 
 @pytest.fixture(scope="module")

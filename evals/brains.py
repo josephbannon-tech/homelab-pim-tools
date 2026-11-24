@@ -286,6 +286,17 @@ class OracleBrain:
                 httpx.get(f"{self.url}/events", params=window)
             elif tool == "add_event":
                 httpx.post(f"{self.url}/events", json=args).raise_for_status()
+            elif tool in ("change_event", "cancel_event"):
+                at = datetime.fromisoformat(args["start"])
+                window = {
+                    "from": (at - timedelta(hours=1)).isoformat(),
+                    "to": (at + timedelta(hours=1)).isoformat(),
+                    "calendar": "all",
+                }
+                found = httpx.get(f"{self.url}/events", params=window).json()["events"]
+                ev = next(e for e in found if e["title"].casefold() == expect["event"].casefold())
+                body = {**args, "uid": ev["uid"], "start": ev["start"], "calendar": ev["calendar"]}
+                httpx.post(f"{self.url}/events/{tool.split('_')[0]}", json=body).raise_for_status()
         if self.rogue:
             httpx.post(f"{self.url}/tasks", json={"list": "todo", "title": "Unrequested"})
         checks = case.get("reply") or {}

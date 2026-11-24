@@ -120,6 +120,10 @@ def call_matches(expect: dict[str, Any], call: Call, store: RecordingStore) -> b
     args = dict(expect.get("args") or {})
     if "task" in expect:  # complete_task names the seeded task by title
         args["uid"] = _uid_of(store, args.get("list", ""), expect["task"])
+    if "event" in expect:  # change_event, cancel_event name a seeded event by title
+        named = store.seeded_titles.get(str(call.args.get("uid")), "")
+        if _norm(named) != _norm(expect["event"]):
+            return False
     if "covers" in expect:  # list_events: the queried window includes this moment
         t = _instant(datetime.fromisoformat(expect["covers"]))
         if not _instant(call.args["from"]) <= t < _instant(call.args["to"]):
@@ -173,6 +177,17 @@ def score_case(
         have = [_norm(t.title) for t in MemoryStore.list_tasks(store, list_name)]
         if have != [_norm(t) for t in titles]:
             reasons.append(f"state: due on {list_name} is {have}")
+    for want, present in [(w, True) for w in state.get("at") or []] + [
+        (w, False) for w in state.get("gone") or []
+    ]:
+        found = any(
+            _norm(e.title) == _norm(want["title"])
+            and arg_matches(want["start"], e.start)
+            and ("end" not in want or arg_matches(want["end"], e.end))
+            for e in store.events
+        )
+        if found != present:
+            reasons.append(f"state: {want} is {'missing' if present else 'still there'}")
     if "events" in state and len(store.events) != state["events"]:
         reasons.append(f"state: {len(store.events)} events, expected {state['events']}")
 

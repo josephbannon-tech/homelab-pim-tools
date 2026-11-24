@@ -21,13 +21,17 @@ from .models import (
     AddEventResult,
     AddTaskRequest,
     AddTaskResult,
+    CancelEventResult,
+    ChangeEventRequest,
+    ChangeEventResult,
     CompleteTaskRequest,
     Event,
     EventList,
+    EventRef,
     Task,
     TaskList,
 )
-from .store import NotFound, Store
+from .store import NotFound, Store, Unsupported
 from .telemetry import configure as configure_telemetry
 
 log = logging.getLogger("pim_tools")
@@ -185,7 +189,8 @@ def complete_task(req: CompleteTaskRequest, store: Store = Depends(get_store)) -
         "Returns appointments on the personal calendar between two ISO 8601 timestamps. "
         "Defaults to the next 7 days. Recurring daily routine blocks (work, meals, "
         "exercise) are on a separate calendar: pass calendar='routine' to read those, "
-        "or calendar='all' for both, which is what to use when checking if a time is free."
+        "or calendar='all' for both, which is what to use when checking if a time is free. "
+        "Each event carries the uid, start and calendar that change_event and cancel_event need."
     ),
     response_model=EventList,
     response_model_by_alias=True,
@@ -226,9 +231,82 @@ def add_event(req: AddEventRequest, store: Store = Depends(get_store)) -> AddEve
     return AddEventResult(event=event, created=created)
 
 
+_SERIES = (
+    "A whole repeating series cannot be changed or cancelled here, only single days: "
+    "if the user wants every occurrence changed, say so and point them to their calendar app."
+)
+
+
+def _scope(event: Event) -> str:
+    if event.recurring:
+        return f"only {event.start:%A %d %B}; the rest of the repeating series is unchanged"
+    return "this single event"
+
+
+def _no_such_event(ref: EventRef, e: NotFound) -> HTTPException:
+    return HTTPException(
+        404,
+        f"no event {ref.uid} starting {ref.start.isoformat()} on calendar {ref.calendar} ({e}). "
+        "Call list_events with calendar='all' for that day and use the uid, start and "
+        "calendar it returns.",
+    )
+
+
+@app.post(
+    "/events/change",
+    operation_id="change_event",
+    summary="Change the time, title or notes of one event",
+    description=(
+        "Changes one event. Identify it by the uid, start and calendar that list_events "
+        "returned. For a repeating event (recurring=true) this changes that one day only. "
+        "Give new_start to move it (the length is kept), new_end to change its length, "
+        "new_title or notes to reword it. " + _SERIES
+    ),
+    response_model=ChangeEventResult,
+)
+def change_event(req: ChangeEventRequest, store: Store = Depends(get_store)) -> ChangeEventResult:
+    if (
+        req.new_start is None
+        and req.new_end is None
+        and req.new_title is None
+        and req.notes is None
+    ):
+        raise HTTPException(422, "nothing to change: give new_start, new_end, new_title or notes")
+    try:
+        event, changed = store.change_event(
+            req.calendar, req.uid, req.start, req.new_start, req.new_end, req.new_title, req.notes
+        )
+    except NotFound as e:
+        raise _no_such_event(req, e) from e
+    except Unsupported as e:
+        raise HTTPException(422, str(e)) from e
+    return ChangeEventResult(event=event, changed=changed, scope=_scope(event))
+
+
+@app.post(
+    "/events/cancel",
+    operation_id="cancel_event",
+    summary="Cancel one event",
+    description=(
+        "Removes one event. Identify it by the uid, start and calendar that list_events "
+        "returned. For a repeating event (recurring=true) this skips that one day only. "
+        "Only cancel what the user named. " + _SERIES
+    ),
+    response_model=CancelEventResult,
+)
+def cancel_event(req: EventRef, store: Store = Depends(get_store)) -> CancelEventResult:
+    try:
+        gone = store.cancel_event(req.calendar, req.uid, req.start)
+    except NotFound as e:
+        raise _no_such_event(req, e) from e
+    except Unsupported as e:
+        raise HTTPException(422, str(e)) from e
+    return CancelEventResult(cancelled=gone, scope=_scope(gone))
+
+
 _ = Event  # re-exported for type checkers
 
-# Second door: the same five operations as MCP tools (Streamable HTTP at /mcp),
+# Second door: the same seven operations as MCP tools (Streamable HTTP at /mcp),
 # generated from the routes above so there is one definition of each tool.
 # Mounted after the routes, which fastapi-mcp reads at construction time.
 FastApiMCP(app, name="pim-tools").mount_http()

@@ -30,6 +30,10 @@ class NotFound(Exception):
     pass
 
 
+class Unsupported(Exception):
+    """A change this service will not make (an all-day event, for one)."""
+
+
 class Store(Protocol):
     def task_lists(self) -> list[str]: ...
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]: ...
@@ -42,6 +46,17 @@ class Store(Protocol):
     def add_event(
         self, title: str, start: datetime, end: datetime | None, notes: str | None
     ) -> tuple[Event, bool]: ...
+    def change_event(
+        self,
+        calendar: str,
+        uid: str,
+        start: datetime,
+        new_start: datetime | None,
+        new_end: datetime | None,
+        new_title: str | None,
+        notes: str | None,
+    ) -> tuple[Event, bool]: ...
+    def cancel_event(self, calendar: str, uid: str, start: datetime) -> Event: ...
 
 
 def _norm(s: str) -> str:
@@ -70,6 +85,21 @@ def _job_view(list_name: str, jobs: list[Job], now: datetime, include_done: bool
         rest = sorted((j for j in jobs if not j.is_due(now)), key=lambda j: (j.due, j.rank))
         out += [_job_task(list_name, j, jobs, True) for j in rest]
     return out
+
+
+def _changed_times(
+    start: datetime, end: datetime, new_start: datetime | None, new_end: datetime | None
+) -> tuple[datetime, datetime]:
+    """A new start keeps the length unless a new end is given too."""
+    length = end - start
+    if new_start is not None:
+        start = _aware(new_start)
+        end = start + length
+    if new_end is not None:
+        end = _aware(new_end)
+    if end <= start:
+        raise Unsupported("the end must be after the start")
+    return start, end
 
 
 def _utc(dt: datetime) -> datetime:
@@ -190,6 +220,40 @@ class MemoryStore:
         self.events.append(e)
         return e, True
 
+    def _one(self, calendar: str, uid: str, start: datetime) -> Event:
+        if calendar not in self.calendars:
+            raise NotFound(calendar)
+        start = _aware(start)
+        for e in self.events:
+            if e.calendar == calendar and e.uid == uid and _aware(e.start) == start:
+                return e
+        raise NotFound(uid)
+
+    def change_event(
+        self,
+        calendar: str,
+        uid: str,
+        start: datetime,
+        new_start: datetime | None,
+        new_end: datetime | None,
+        new_title: str | None,
+        notes: str | None,
+    ) -> tuple[Event, bool]:
+        """Each stored Event is one day here, so a repeating series is several
+        events sharing a uid and changing one never reaches the others."""
+        e = self._one(calendar, uid, start)
+        want = _changed_times(_aware(e.start), _aware(e.end or e.start), new_start, new_end)
+        before = (e.start, e.end, e.title, e.notes)
+        e.start, e.end = want
+        e.title = new_title.strip() if new_title else e.title
+        e.notes = notes if notes is not None else e.notes
+        return e, (e.start, e.end, e.title, e.notes) != before
+
+    def cancel_event(self, calendar: str, uid: str, start: datetime) -> Event:
+        e = self._one(calendar, uid, start)
+        self.events.remove(e)
+        return e
+
 
 # --------------------------------------------------------------------------- caldav
 
@@ -255,6 +319,8 @@ class CalDAVStore:
             end=_aware(end) if end else None,
             notes=str(desc) if desc else None,
             calendar=calendar,
+            # an expanded search marks every day of a series with RECURRENCE-ID
+            recurring="RECURRENCE-ID" in ve or "RRULE" in ve,
         )
 
     # -- tasks
@@ -405,3 +471,144 @@ class CalDAVStore:
             kwargs["description"] = notes
         ev = cal.save_event(**kwargs)
         return self._event_from(ev, self._event_calendar_name), True
+
+    # -- changing one event, or one day of a repeating one
+    #
+    # A repeating event is one resource: a master VEVENT with the RRULE, plus one
+    # VEVENT per day that differs (RECURRENCE-ID names the day it replaces) and
+    # an EXDATE on the master per day that is skipped. These two methods only
+    # ever add or edit those per-day parts. Nothing here can rewrite an RRULE or
+    # delete a series, so a wrong call costs one day, which shows on the phone
+    # and is put right by hand.
+
+    def _locate(self, calendar: str, uid: str, start: datetime):
+        """(event object, its calendar, master, the VEVENT for that day or None,
+        that day as the series knows it). Raises NotFound when no event with
+        this uid starts then."""
+        import recurring_ical_events
+        from caldav.lib import error as caldav_error
+
+        if calendar not in self._calendars:
+            raise NotFound(calendar)
+        try:
+            obj = self._calendar(calendar).event_by_uid(uid)
+        except caldav_error.NotFoundError as e:
+            raise NotFound(uid) from e
+        ical = obj.icalendar_instance
+        parts = ical.walk("VEVENT")
+        master = next((c for c in parts if "RECURRENCE-ID" not in c), None)
+        if master is None:
+            raise NotFound(uid)
+        if not isinstance(master["DTSTART"].dt, datetime):
+            raise Unsupported("all-day events cannot be changed here")
+        start = _aware(start)
+        day = next(
+            (
+                o
+                for o in recurring_ical_events.of(ical).between(
+                    start - timedelta(minutes=1), start + timedelta(minutes=1)
+                )
+                if _aware(o["DTSTART"].dt) == start
+            ),
+            None,
+        )
+        if day is None:
+            raise NotFound(uid)
+        if "RRULE" not in master:
+            return obj, ical, master, master, None
+        # The day in the series' own terms: for a day already moved, the slot it
+        # was moved from; otherwise the start itself, in the master's timezone.
+        rid = day["RECURRENCE-ID"].dt if "RECURRENCE-ID" in day else day["DTSTART"].dt
+        zone = master["DTSTART"].dt.tzinfo
+        rid = _aware(rid).astimezone(zone) if zone else _aware(rid)
+        override = next(
+            (c for c in parts if "RECURRENCE-ID" in c and _aware(c["RECURRENCE-ID"].dt) == rid),
+            None,
+        )
+        return obj, ical, master, override, rid
+
+    @staticmethod
+    def _as_event(ve, calendar: str, recurring: bool) -> Event:
+        start = _aware(ve["DTSTART"].dt)
+        end = _aware(ve["DTEND"].dt) if "DTEND" in ve else None
+        if end is None and "DURATION" in ve:
+            end = start + ve["DURATION"].dt
+        desc = ve.get("description")
+        return Event(
+            uid=str(ve.get("uid")),
+            title=str(ve.get("summary", "")),
+            start=start,
+            end=end,
+            notes=str(desc) if desc else None,
+            calendar=calendar,
+            recurring=recurring,
+        )
+
+    def change_event(
+        self,
+        calendar: str,
+        uid: str,
+        start: datetime,
+        new_start: datetime | None,
+        new_end: datetime | None,
+        new_title: str | None,
+        notes: str | None,
+    ) -> tuple[Event, bool]:
+        from icalendar import Event as VEvent
+
+        obj, ical, master, target, rid = self._locate(calendar, uid, start)
+        recurring = rid is not None
+        zone = master["DTSTART"].dt.tzinfo or UTC
+        if target is not None:
+            now = self._as_event(target, calendar, recurring)
+        else:  # an untouched day of a series: what the master says, on that day
+            length = self._as_event(master, calendar, True)
+            span = (length.end - length.start) if length.end else timedelta(hours=1)
+            now = length.model_copy(update={"start": _aware(rid), "end": _aware(rid) + span})
+        want_start, want_end = _changed_times(now.start, now.end or now.start, new_start, new_end)
+        want_title = new_title.strip() if new_title else now.title
+        want_notes = notes if notes is not None else now.notes
+        if (want_start, want_end, want_title, want_notes) == (
+            now.start,
+            now.end,
+            now.title,
+            now.notes,
+        ):
+            return now, False
+        if target is None:
+            target = VEvent()
+            target.add("uid", uid)
+            target.add("recurrence-id", rid)
+            for keep in ("location", "categories", "transp", "class"):
+                if keep in master:
+                    target.add(keep, master[keep])
+            ical.add_component(target)
+        for prop in ("dtstart", "dtend", "duration", "summary", "description", "dtstamp"):
+            target.pop(prop, None)
+        target.add("dtstamp", _now())
+        target.add("dtstart", want_start.astimezone(zone))
+        target.add("dtend", want_end.astimezone(zone))
+        target.add("summary", want_title)
+        if want_notes:
+            target.add("description", want_notes)
+        obj.icalendar_instance = ical
+        obj.save()
+        return self._as_event(target, calendar, recurring), True
+
+    def cancel_event(self, calendar: str, uid: str, start: datetime) -> Event:
+        obj, ical, master, target, rid = self._locate(calendar, uid, start)
+        if rid is None:  # a single event: the whole resource goes
+            gone = self._as_event(master, calendar, False)
+            obj.delete()
+            return gone
+        if target is not None:
+            gone = self._as_event(target, calendar, True)
+            ical.subcomponents.remove(target)
+        else:
+            was = self._as_event(master, calendar, True)
+            span = (was.end - was.start) if was.end else timedelta(hours=1)
+            gone = was.model_copy(update={"start": _aware(rid), "end": _aware(rid) + span})
+        master.add("exdate", rid)
+        obj.icalendar_instance = ical
+        obj.save()
+        return gone

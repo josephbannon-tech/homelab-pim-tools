@@ -50,6 +50,10 @@ class Event(BaseModel):
     end: datetime | None = None
     notes: str | None = None
     calendar: str = Field(default="personal", description="Which calendar the event is on.")
+    recurring: bool = Field(
+        default=False,
+        description="True for one day of a repeating series. Only that day can be changed here.",
+    )
 
 
 class EventList(BaseModel):
@@ -71,3 +75,34 @@ class AddEventRequest(BaseModel):
 class AddEventResult(BaseModel):
     event: Event
     created: bool = Field(description="False when an identical event already existed.")
+
+
+class EventRef(BaseModel):
+    uid: str = Field(description="The event uid from list_events.")
+    start: datetime = Field(
+        description="The event's current start, exactly as list_events returned it. "
+        "For a repeating event this picks the day."
+    )
+    calendar: str = Field(
+        default="personal", description="The calendar the event is on, from list_events."
+    )
+
+
+class ChangeEventRequest(EventRef):
+    new_start: datetime | None = Field(
+        default=None, description="New start, ISO 8601 with timezone. The length is kept."
+    )
+    new_end: datetime | None = Field(default=None, description="New end, to change the length.")
+    new_title: str | None = Field(default=None, min_length=1, max_length=200)
+    notes: str | None = Field(default=None, description="Replaces the event's notes.")
+
+
+class ChangeEventResult(BaseModel):
+    event: Event = Field(description="The event as it now stands.")
+    changed: bool = Field(description="False when it already had these values.")
+    scope: str = Field(description="What was affected: one day of a series, or a single event.")
+
+
+class CancelEventResult(BaseModel):
+    cancelled: Event = Field(description="The event that was removed.")
+    scope: str = Field(description="What was affected: one day of a series, or a single event.")

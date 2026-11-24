@@ -27,7 +27,7 @@ from pim_tools.app import app, get_store
 from pim_tools.models import Event, Task
 from pim_tools.store import MemoryStore, NotFound
 
-WRITES = frozenset({"add_task", "complete_task", "add_event"})
+WRITES = frozenset({"add_task", "complete_task", "add_event", "change_event", "cancel_event"})
 
 
 @dataclass
@@ -48,6 +48,7 @@ class RecordingStore(MemoryStore):
     as the CalDAV store does (MemoryStore alone would create the list)."""
 
     calls: list[Call] = field(default_factory=list)
+    seeded_titles: dict[str, str] = field(default_factory=dict)  # event uid -> title at seed
 
     def _record(self, tool: str, args: dict[str, Any]) -> Call:
         call = Call(tool, args)
@@ -104,13 +105,47 @@ class RecordingStore(MemoryStore):
         call.changed = created
         return event, created
 
+    def change_event(self, calendar, uid, start, new_start, new_end, new_title, notes):
+        call = self._record(
+            "change_event",
+            {
+                "calendar": calendar,
+                "uid": uid,
+                "start": start,
+                "new_start": new_start,
+                "new_end": new_end,
+                "new_title": new_title,
+                "notes": notes,
+            },
+        )
+        try:
+            event, changed = super().change_event(
+                calendar, uid, start, new_start, new_end, new_title, notes
+            )
+        except Exception:
+            call.ok = False
+            raise
+        call.changed = changed
+        return event, changed
+
+    def cancel_event(self, calendar, uid, start):
+        call = self._record("cancel_event", {"calendar": calendar, "uid": uid, "start": start})
+        try:
+            gone = super().cancel_event(calendar, uid, start)
+        except Exception:
+            call.ok = False
+            raise
+        call.changed = True
+        return gone
+
 
 def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
     """Build a store from a resolved seed: {tasks: {list: [..]}, events: [..],
     jobs: [..]}. A task is a title or {title, due, completed}; uids are opaque on
     purpose so a model has to read them from list_tasks. A job is a repeating
     task: {list, title, rank, every ('7d' or '1h'), due, after, resets}, the
-    last two naming another job by title."""
+    last two naming another job by title. Events that name the same `series`
+    are days of one repeating event and share a uid."""
     store = RecordingStore()
     if clock is not None:  # a run pinned to a day that is not today
         store.clock = clock
@@ -127,10 +162,16 @@ def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
                     completed=bool(item.get("completed")),
                 )
             )
+    series: dict[str, str] = {}
     for ev in seed.get("events") or []:
+        uid = str(uuid.uuid4())
+        if ev.get("series"):
+            uid = series.setdefault(ev["series"], uid)
+        store.seeded_titles[uid] = ev["title"]
         store.events.append(
             Event(
-                uid=str(uuid.uuid4()),
+                uid=uid,
+                recurring=bool(ev.get("series")),
                 title=ev["title"],
                 start=datetime.fromisoformat(ev["start"]),
                 end=datetime.fromisoformat(ev["end"]) if ev.get("end") else None,
