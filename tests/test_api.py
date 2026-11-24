@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pim_tools.app import app, get_store
+from pim_tools.models import Event
 from pim_tools.store import MemoryStore
 
 
@@ -77,7 +78,15 @@ def test_openapi_operation_ids_are_the_tool_names(client):
         for p in client.get("/openapi.json").json()["paths"].values()
         for op in p.values()
     }
-    assert ops == {"list_tasks", "add_task", "complete_task", "list_events", "add_event"}
+    assert ops == {
+        "list_tasks",
+        "add_task",
+        "complete_task",
+        "list_events",
+        "add_event",
+        "change_event",
+        "cancel_event",
+    }
 
 
 def test_memory_store_date_helpers():
@@ -122,3 +131,99 @@ def test_unknown_list_names_the_ones_that_exist(client):
     r = client.get("/tasks/hardware")
     assert r.status_code == 404
     assert "chores, shopping" in r.json()["detail"]
+
+
+# ------------------------------------------------- changing one event, one day
+
+
+def _series(store, title, days, hour=9, calendar="routine"):
+    """A repeating series as the memory store holds it: one event a day, one uid."""
+    for d in days:
+        store.events.append(
+            Event(
+                uid="series-1",
+                title=title,
+                start=datetime(2026, 10, d, hour, 0, tzinfo=UTC),
+                end=datetime(2026, 10, d, hour + 1, 0, tzinfo=UTC),
+                calendar=calendar,
+                recurring=True,
+            )
+        )
+
+
+def _day(client, d, calendar="all"):
+    r = client.get(
+        "/events",
+        params={
+            "from": f"2026-10-{d:02d}T00:00:00Z",
+            "to": f"2026-10-{d + 1:02d}T00:00:00Z",
+            "calendar": calendar,
+        },
+    )
+    return [(e["title"], e["start"][11:16], e["end"][11:16]) for e in r.json()["events"]]
+
+
+def test_moving_one_day_of_a_series_leaves_the_other_days(client):
+    store = app.dependency_overrides[get_store]()
+    _series(store, "Coffee nap", [5, 6, 7], hour=17)
+    ref = {"uid": "series-1", "start": "2026-10-06T17:00:00Z", "calendar": "routine"}
+    r = client.post("/events/change", json={**ref, "new_start": "2026-10-06T17:30:00Z"}).json()
+    assert r["changed"] and "only Tuesday 06 October" in r["scope"]
+    assert _day(client, 6) == [("Coffee nap", "17:30", "18:30")]  # the length is kept
+    assert _day(client, 5) == _day(client, 7) == [("Coffee nap", "17:00", "18:00")]
+
+
+def test_shortening_renaming_and_notes(client):
+    store = app.dependency_overrides[get_store]()
+    _series(store, "Dinner", [5, 6], hour=18)
+    ref = {"uid": "series-1", "start": "2026-10-05T18:00:00Z", "calendar": "routine"}
+    body = {
+        **ref,
+        "new_end": "2026-10-05T18:40:00Z",
+        "new_title": "Dinner: leftovers",
+        "notes": "x",
+    }
+    r = client.post("/events/change", json=body).json()
+    assert r["event"]["notes"] == "x"
+    assert _day(client, 5) == [("Dinner: leftovers", "18:00", "18:40")]
+    assert client.post("/events/change", json=body).json()["changed"] is False
+
+
+def test_cancelling_one_day_skips_only_that_day(client):
+    store = app.dependency_overrides[get_store]()
+    _series(store, "Language", [5, 6, 7])
+    ref = {"uid": "series-1", "start": "2026-10-06T09:00:00Z", "calendar": "routine"}
+    r = client.post("/events/cancel", json=ref).json()
+    assert r["cancelled"]["title"] == "Language" and "rest of the repeating series" in r["scope"]
+    assert _day(client, 6) == [] and len(_day(client, 5)) == len(_day(client, 7)) == 1
+    assert client.post("/events/cancel", json=ref).status_code == 404
+
+
+def test_a_single_event_is_changed_or_removed_whole(client):
+    made = client.post(
+        "/events", json={"title": "Dentist", "start": "2026-10-02T10:00:00Z"}
+    ).json()["event"]
+    ref = {"uid": made["uid"], "start": made["start"]}
+    r = client.post("/events/change", json={**ref, "new_start": "2026-10-02T11:00:00Z"}).json()
+    assert r["scope"] == "this single event" and r["event"]["end"].startswith("2026-10-02T12:00")
+    assert client.post("/events/cancel", json=ref).status_code == 404  # it moved
+    moved = {"uid": made["uid"], "start": "2026-10-02T11:00:00Z"}
+    assert client.post("/events/cancel", json=moved).json()["scope"] == "this single event"
+    assert _day(client, 2) == []
+
+
+def test_an_event_that_is_not_there_says_how_to_find_it(client):
+    ref = {"uid": "nope", "start": "2026-10-02T10:00:00Z"}
+    r = client.post("/events/change", json={**ref, "new_title": "x"})
+    assert r.status_code == 404 and "list_events" in r.json()["detail"]
+    assert client.post("/events/change", json=ref).status_code == 422  # nothing to change
+    wrong = {**ref, "calendar": "holidays"}
+    assert client.post("/events/cancel", json=wrong).status_code == 404
+
+
+def test_an_end_before_the_start_is_refused(client):
+    made = client.post(
+        "/events", json={"title": "Dentist", "start": "2026-10-02T10:00:00Z"}
+    ).json()["event"]
+    body = {"uid": made["uid"], "start": made["start"], "new_end": "2026-10-02T09:00:00Z"}
+    assert client.post("/events/change", json=body).status_code == 422

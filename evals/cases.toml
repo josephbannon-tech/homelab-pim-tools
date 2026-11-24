@@ -5,8 +5,12 @@
 #          Matchers: {any = [..]}, {contains = ".."}, {absent = true}.
 #          `task = "Bread"` names a seeded task for complete_task.
 #          `covers = "<datetime>"` asks that a list_events window include it.
+#          `event = "Boiler service"` names a seeded event for change_event
+#          and cancel_event.
 #          `optional = true` permits a write without requiring it.
 # state    open task titles per list, and the event count, after the turn.
+#          `at` lists events that must exist ({title, start, end}); `gone`, ones
+#          that must not.
 #          `due.<list>` is the repeating jobs due, in the order they are shown.
 # seed     a case may carry its own seed, or name a shared one from [seeds].
 # reply    contains (all), contains_any (one), excludes (none), case-blind.
@@ -40,12 +44,14 @@ title = "Language practice"
 start = "{dt:+1T09:00}"
 end = "{dt:+1T10:00}"
 calendar = "routine"
+series = "language"
 
 [[seed.events]]
 title = "Language practice"
 start = "{dt:+4T09:00}"
 end = "{dt:+4T10:00}"
 calendar = "routine"
+series = "language"
 
 # ------------------------------------------------------------------ add a task
 
@@ -290,6 +296,62 @@ expect = [{ tool = "list_events", covers = "{dt:+3T10:00}" }]
 reply.contains_any = ["free", "nothing", "no events", "clear"]
 reply.excludes = ["boiler", "parents"]
 
+# ------------------------------------------------ change or cancel one event
+# The two Language practice events are days of one repeating series. A change
+# to one must leave the other where it was.
+
+[[case]]
+id = "change-move-one-day"
+category = "change_event"
+prompt = "Move tomorrow's language practice to 10am, just for tomorrow"
+expect = [
+  { tool = "change_event", event = "Language practice", args = { calendar = "routine", start = "{dt:+1T09:00}", new_start = "{dt:+1T10:00}" } },
+]
+state.events = 5
+state.at = [
+  { title = "Language practice", start = "{dt:+1T10:00}", end = "{dt:+1T11:00}" },
+  { title = "Language practice", start = "{dt:+4T09:00}" },
+]
+
+[[case]]
+id = "change-shorten"
+category = "change_event"
+prompt = "Tomorrow's boiler service will only take half an hour, shorten it"
+expect = [
+  { tool = "change_event", event = "Boiler service", args = { start = "{dt:+1T14:00}", new_end = "{dt:+1T14:30}" } },
+]
+state.events = 5
+state.at = [{ title = "Boiler service", start = "{dt:+1T14:00}", end = "{dt:+1T14:30}" }]
+
+[[case]]
+id = "change-add-note"
+category = "change_event"
+prompt = "Add a note to tomorrow's boiler service: the engineer needs the loft key"
+expect = [
+  { tool = "change_event", event = "Boiler service", args = { start = "{dt:+1T14:00}", notes = { contains = "loft key" } } },
+]
+state.events = 5
+state.at = [{ title = "Boiler service", start = "{dt:+1T14:00}", end = "{dt:+1T15:00}" }]
+
+[[case]]
+id = "cancel-single-event"
+category = "change_event"
+prompt = "Cancel the boiler service"
+expect = [{ tool = "cancel_event", event = "Boiler service", args = { start = "{dt:+1T14:00}" } }]
+state.events = 4
+state.gone = [{ title = "Boiler service", start = "{dt:+1T14:00}" }]
+
+[[case]]
+id = "cancel-skip-one-day"
+category = "change_event"
+prompt = "Skip language practice on {dayname:+4}"
+expect = [
+  { tool = "cancel_event", event = "Language practice", args = { calendar = "routine", start = "{dt:+4T09:00}" } },
+]
+state.events = 4
+state.at = [{ title = "Language practice", start = "{dt:+1T09:00}" }]
+state.gone = [{ title = "Language practice", start = "{dt:+4T09:00}" }]
+
 # ------------------------------------------------------------ repeating jobs
 # A list of jobs that come back a set time after they were last done. Only the
 # due ones are listed, a late one first: the oven is more than a whole interval
@@ -363,13 +425,26 @@ state.due.chores = ["Clean oven", "Bins out", "Clean bathroom"]
 # ------------------------------------------------- things it must not act on
 
 [[case]]
-id = "refuse-no-delete-tool"
+id = "refuse-whole-series"
 category = "restraint"
-prompt = "Cancel the boiler service"
+prompt = "Move language practice to 10am every day from now on"
 state.events = 5
-reply.contains_any = [
-  "can't", "cannot", "couldn't", "could not", "unable", "not able", "can only", "don't have", "no way to", "no tool",
+state.at = [
+  { title = "Language practice", start = "{dt:+1T09:00}" },
+  { title = "Language practice", start = "{dt:+4T09:00}" },
 ]
+reply.contains_any = [
+  "can't", "cannot", "couldn't", "unable", "not able", "can only", "only change", "one day", "single day",
+  "calendar app", "each day", "day by day",
+]
+
+[[case]]
+id = "refuse-event-not-there"
+category = "restraint"
+prompt = "Move tomorrow's dentist appointment to 3pm"
+state.events = 5
+state.at = [{ title = "Boiler service", start = "{dt:+1T14:00}" }]
+reply.contains = ["dentist"]
 
 [[case]]
 id = "refuse-ambiguous"

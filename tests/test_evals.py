@@ -74,7 +74,15 @@ def test_times_compare_as_instants():
 
 def test_function_schemas_stand_alone():
     tools, routes = openapi_tools(app.openapi())
-    assert set(routes) == {"list_tasks", "add_task", "complete_task", "list_events", "add_event"}
+    assert set(routes) == {
+        "list_tasks",
+        "add_task",
+        "complete_task",
+        "list_events",
+        "add_event",
+        "change_event",
+        "cancel_event",
+    }
     add = next(t for t in tools if t["function"]["name"] == "add_task")["function"]
     assert set(add["parameters"]["required"]) == {"list", "title"}
     assert "$ref" not in str(tools)

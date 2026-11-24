@@ -103,3 +103,82 @@ def test_repeating_job_roundtrip(store):
     finally:
         wash.delete()
         dry.delete()
+
+
+def test_one_day_of_a_series_roundtrip(store):
+    """Against a real server: moving one day writes a RECURRENCE-ID override,
+    moving it again edits that override, cancelling writes an EXDATE, and the
+    RRULE is never touched."""
+    from zoneinfo import ZoneInfo
+
+    from icalendar import Calendar
+    from icalendar import Event as VEvent
+
+    name = store._event_calendar_name
+    cal = store._calendar(name)
+    tz = ZoneInfo("Europe/London")
+    uid = f"pim-tools-live-{uuid.uuid4().hex[:8]}"
+    first = (datetime.now(tz) + timedelta(days=40)).replace(
+        hour=17, minute=0, second=0, microsecond=0
+    )
+    c = Calendar()
+    c.add("prodid", "-//pim-tools//test//EN")
+    c.add("version", "2.0")
+    ve = VEvent()
+    ve.add("uid", uid)
+    ve.add("summary", "Live nap")
+    ve.add("dtstamp", datetime.now(UTC))
+    ve.add("dtstart", first)
+    ve.add("dtend", first + timedelta(hours=1))
+    ve.add("rrule", {"FREQ": "DAILY", "COUNT": 4})
+    c.add_component(ve)
+    obj = cal.save_event(ical=c.to_ical().decode())
+
+    def days():
+        found = store.list_events(first - timedelta(hours=1), first + timedelta(days=4), name)
+        return [
+            (e.start.astimezone(tz) - first, e.end - e.start, e.title, e.recurring)
+            for e in found
+            if e.uid == uid
+        ]
+
+    hour, day = timedelta(hours=1), timedelta(days=1)
+    try:
+        assert days() == [(n * day, hour, "Live nap", True) for n in range(4)]
+
+        e, changed = store.change_event(
+            name, uid, first + day, first + day + timedelta(minutes=30), None, None, None
+        )
+        assert changed and e.recurring and e.end - e.start == hour
+        assert [d[0] for d in days()] == [0 * day, day + timedelta(minutes=30), 2 * day, 3 * day]
+
+        # again, found by where it now is: the same override is edited, not a second one added
+        moved = first + day + timedelta(minutes=30)
+        e, changed = store.change_event(
+            name, uid, moved, None, moved + timedelta(minutes=40), "Short nap", "today only"
+        )
+        assert changed and e.title == "Short nap" and e.notes == "today only"
+        obj.load()
+        parts = obj.icalendar_instance.walk("VEVENT")
+        assert len(parts) == 2 and str(parts[0]["RRULE"].to_ical().decode()) == "FREQ=DAILY;COUNT=4"
+        assert store.change_event(name, uid, moved, None, None, "Short nap", None)[1] is False
+
+        gone = store.cancel_event(name, uid, first + 2 * day)  # an untouched day
+        assert gone.start == first + 2 * day and gone.title == "Live nap"
+        assert store.cancel_event(name, uid, moved).title == "Short nap"  # the moved day
+        assert [d[0] for d in days()] == [0 * day, 3 * day]
+        obj.load()
+        assert len(obj.icalendar_instance.walk("VEVENT")) == 1
+
+        with pytest.raises(Exception, match=uid):
+            store.cancel_event(name, uid, first + 2 * day)
+    finally:
+        obj.delete()
+
+    # a single event moves and goes whole
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=41)
+    one, _ = store.add_event(f"pim-tools live one-off {uid[-8:]}", start, None, None)
+    e, changed = store.change_event(name, one.uid, start, start + hour, None, None, None)
+    assert changed and not e.recurring and e.start == start + hour
+    assert store.cancel_event(name, one.uid, start + hour).uid == one.uid
+    assert all(x.uid != one.uid for x in store.list_events(start - hour, start + 3 * hour))
