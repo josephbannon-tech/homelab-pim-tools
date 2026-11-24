@@ -31,7 +31,7 @@ app = FastAPI(
     title="pim-tools",
     version=__version__,
     description=(
-        "Ground-truth tools over the family calendar and task lists. "
+        "Ground-truth tools over a personal calendar and task lists. "
         "Every write returns the stored object; only report what it says."
     ),
 )
@@ -59,6 +59,17 @@ def get_store() -> Store:
     return _default_store()
 
 
+def _no_such_list(name: NotFound, store: Store) -> HTTPException:
+    """A 404 the model can recover from: it names the lists that do exist, so
+    the next call can pick one or the reply can offer them."""
+    lists = ", ".join(store.task_lists()) or "none"
+    return HTTPException(
+        404,
+        f"no task list named {name}. The lists are: {lists}. "
+        "Do not add to a different list without asking.",
+    )
+
+
 @app.get("/health", include_in_schema=False)
 def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
@@ -68,7 +79,10 @@ def health() -> dict[str, str]:
     "/tasks/{list_name}",
     operation_id="list_tasks",
     summary="List the open tasks on a task list",
-    description="Returns the open items on a task list such as 'shopping' or 'chores'.",
+    description=(
+        "Returns the open items on a task list, by name (for example 'shopping'). "
+        "An unknown name returns the names that exist."
+    ),
     response_model=TaskList,
 )
 def list_tasks(
@@ -79,7 +93,7 @@ def list_tasks(
     try:
         tasks = store.list_tasks(list_name, include_completed=include_completed)
     except NotFound as e:
-        raise HTTPException(404, f"no task list named {e}") from e
+        raise _no_such_list(e, store) from e
     return TaskList(list=list_name, open=sum(not t.completed for t in tasks), tasks=tasks)
 
 
@@ -88,7 +102,7 @@ def list_tasks(
     operation_id="add_task",
     summary="Add a task to a task list",
     description=(
-        "Adds an item to a task list ('shopping' for groceries, 'chores' for jobs). "
+        "Adds an item to a task list, by name (for example 'shopping' for groceries). "
         "Idempotent: if the same open item already exists, returns it with created=false."
     ),
     response_model=AddTaskResult,
@@ -97,7 +111,7 @@ def add_task(req: AddTaskRequest, store: Store = Depends(get_store)) -> AddTaskR
     try:
         task, created = store.add_task(req.list, req.title, req.due)
     except NotFound as e:
-        raise HTTPException(404, f"no task list named {e}") from e
+        raise _no_such_list(e, store) from e
     return AddTaskResult(task=task, created=created)
 
 

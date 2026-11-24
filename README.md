@@ -1,6 +1,6 @@
 # homelab-pim-tools
 
-A small, deterministic tool server that gives an LLM front end (Open WebUI in my homelab) ground-truth access to a family calendar and task lists held in a CalDAV server (Radicale). Five operations, two doors (OpenAPI and MCP), one container, no state of its own.
+A small, deterministic tool server that gives an LLM front end (Open WebUI in my homelab) ground-truth access to my calendar and task lists held in a CalDAV server (Radicale). Five operations, two doors (OpenAPI and MCP), one container, no state of its own.
 
 It exists because retrieval over personal data is the wrong tool for the job. An assistant asked "what's on Thursday" should call a function that reads the calendar and returns the events, not guess from context. Writes go the same way: "add milk to the shopping list" becomes one idempotent API call whose response is the stored item, and the model is instructed to report only what that response says.
 

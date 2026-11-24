@@ -43,7 +43,7 @@ def system_prompt(tz: ZoneInfo) -> str:
         f"Current date and time: {now:%A %d %B %Y, %H:%M} ({tz.key}, UTC{now:%z}). "
         "Resolve relative dates ('Thursday', 'next week') from this. "
         "Give calendar times as ISO 8601 with this timezone offset. "
-        "You have tools for the family calendar and task lists; use them for "
+        "You have tools for the user's calendar and task lists; use them for "
         "anything about events or lists, and report only what a tool result says. "
         "Never claim an add succeeded unless the tool returned the created object."
     )
@@ -287,7 +287,7 @@ class OracleBrain:
             elif tool == "add_event":
                 httpx.post(f"{self.url}/events", json=args).raise_for_status()
         if self.rogue:
-            httpx.post(f"{self.url}/tasks", json={"list": "chores", "title": "Unrequested"})
+            httpx.post(f"{self.url}/tasks", json={"list": "todo", "title": "Unrequested"})
         checks = case.get("reply") or {}
         return " ".join(checks.get("contains", []) + checks.get("contains_any", [])[:1])
 

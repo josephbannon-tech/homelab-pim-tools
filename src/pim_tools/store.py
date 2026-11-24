@@ -25,6 +25,7 @@ class NotFound(Exception):
 
 
 class Store(Protocol):
+    def task_lists(self) -> list[str]: ...
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]: ...
     def add_task(self, list_name: str, title: str, due: date | None) -> tuple[Task, bool]: ...
     def complete_task(self, list_name: str, uid: str) -> Task: ...
@@ -72,6 +73,9 @@ class MemoryStore:
     tasks: dict[str, list[Task]] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
     calendars: tuple[str, ...] = ("personal", "routine")
+
+    def task_lists(self) -> list[str]:
+        return sorted(self.tasks)
 
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]:
         items = self.tasks.get(list_name)
@@ -185,6 +189,11 @@ class CalDAVStore:
         )
 
     # -- tasks
+    def task_lists(self) -> list[str]:
+        """Every collection that is not an event calendar, by URL leaf."""
+        leaves = (str(c.url).rstrip("/").rsplit("/", 1)[-1] for c in self._principal.calendars())
+        return sorted(leaf for leaf in leaves if leaf not in self._calendars)
+
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]:
         cal = self._calendar(list_name)
         todos = cal.todos(include_completed=include_completed)

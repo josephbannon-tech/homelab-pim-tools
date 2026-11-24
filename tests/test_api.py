@@ -116,3 +116,9 @@ def test_routine_blocks_are_a_separate_calendar():
     assert titles(calendar="all") == ["Dentist", "Lunch"]
     assert c.get("/events", params={**window, "calendar": "work"}).status_code == 404
     app.dependency_overrides.clear()
+
+
+def test_unknown_list_names_the_ones_that_exist(client):
+    r = client.get("/tasks/hardware")
+    assert r.status_code == 404
+    assert "chores, shopping" in r.json()["detail"]
