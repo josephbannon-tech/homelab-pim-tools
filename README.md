@@ -25,6 +25,7 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 - **Idempotency lives in the store layer, not the prompt.** A model that retries a failed turn must not create a second "Milk". `add_task` and `add_event` look for an existing open item with the same key and return it with `created: false`. The response shape makes the outcome explicit so the model can say "already on the list" instead of "added".
 - **CalDAV is the store, not a database of my own.** Calendars and task lists stay in a standard format that the phones read natively (DAVx5, Tasks.org). The tool server is a second door onto the same data and can be deleted without losing anything.
 - **One principal, calendars addressed by URL leaf.** Radicale exposes `/user/shopping/`, `/user/chores/`, `/user/personal/`. The leaf name is what the phone apps show, so it is the name the model uses. Display names are not trusted for lookup.
+- **Routine blocks on their own calendar.** My calendar is mostly time-blocking: a dozen recurring blocks a day and a few real appointments a month. Read straight, "what's on tomorrow?" returns twelve routine entries with the one appointment buried in them. So appointments and routine live in two CalDAV calendars (the phone overlays them), `list_events` reads appointments unless asked for `routine` or `all`, and the tool description tells the model to use `all` when the question is whether a time is free. Writes only ever go to the appointments calendar.
 - **Store behind a `Protocol`, tested twice.** The HTTP layer is tested against an in-memory store (fast, no server). The CalDAV store has a separate round-trip test that runs only when `RADICALE_URL` is set, so CI stays hermetic and the live behaviour is still checked before a release.
 - **MCP generated from the OpenAPI routes, not written twice.** fastapi-mcp turns each route into a tool named after its `operationId`, with the descriptions and schemas the OpenAPI door already exposes, and invokes the route in-process with the caller's bearer forwarded. A hand-written MCP server would be a second copy of the tool contract, and copies drift.
 - **A shared-secret bearer token, not identity.** v1 had no auth and stayed on a ClusterIP for that reason. The token (v0.3) lets the service sit on a NodePort for an MCP client on another host without letting anything else on the LAN write to the calendar. It says a caller is trusted, not who they are, which is all a single-user tool needs. The gate is a pure ASGI middleware because Starlette's `BaseHTTPMiddleware` buffers response bodies and the MCP transport streams.
@@ -38,7 +39,7 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 
 ## Eval set
 
-[`evals/`](evals/) holds 30 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
+[`evals/`](evals/) holds 32 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
 
 ## Tracing
 
@@ -49,6 +50,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector.monitoring
 ```bash
 export RADICALE_URL=http://radicale.example:5232/ RADICALE_USER=alice RADICALE_PASSWORD=...
 export RADICALE_CALENDAR=personal   # the events calendar; task lists are addressed by name
+export RADICALE_EXTRA_CALENDARS=routine   # optional, read-only: list_events calendar=routine|all
 export PIM_TOOLS_TOKEN=...          # optional; omit for the open, in-cluster-only posture
 uvicorn pim_tools.app:app --host 0.0.0.0 --port 8000
 ```
