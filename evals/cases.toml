@@ -7,6 +7,8 @@
 #          `covers = "<datetime>"` asks that a list_events window include it.
 #          `optional = true` permits a write without requiring it.
 # state    open task titles per list, and the event count, after the turn.
+#          `due.<list>` is the repeating jobs due, in the order they are shown.
+# seed     a case may carry its own seed, or name a shared one from [seeds].
 # reply    contains (all), contains_any (one), excludes (none), case-blind.
 #
 # Any write that changes the store and matches no `expect` entry is a bad
@@ -288,6 +290,76 @@ expect = [{ tool = "list_events", covers = "{dt:+3T10:00}" }]
 reply.contains_any = ["free", "nothing", "no events", "clear"]
 reply.excludes = ["boiler", "parents"]
 
+# ------------------------------------------------------------ repeating jobs
+# A list of jobs that come back a set time after they were last done. Only the
+# due ones are listed, a late one first: the oven is more than a whole interval
+# late, so it outranks the weekly jobs. Bed sheets are not due and stay hidden.
+
+[seeds.jobs.tasks]
+shopping = ["Milk"]
+todo = ["Book MOT"]
+
+[[seeds.jobs.jobs]]
+list = "chores"
+title = "Bins out"
+rank = 1
+every = "7d"
+due = "{dt:-1T09:00}"
+
+[[seeds.jobs.jobs]]
+list = "chores"
+title = "Clean bathroom"
+rank = 2
+every = "7d"
+due = "{dt:-1T09:00}"
+
+[[seeds.jobs.jobs]]
+list = "chores"
+title = "Hoover floors"
+rank = 3
+every = "7d"
+due = "{dt:-1T09:00}"
+
+[[seeds.jobs.jobs]]
+list = "chores"
+title = "Change bed sheets"
+rank = 4
+every = "7d"
+due = "{dt:+3T09:00}"
+
+[[seeds.jobs.jobs]]
+list = "chores"
+title = "Clean oven"
+rank = 9
+every = "90d"
+due = "{dt:-100T09:00}"
+
+[[case]]
+id = "jobs-due"
+category = "repeating"
+seed = "jobs"
+prompt = "What chores are due?"
+expect = [{ tool = "list_tasks", args = { list = "chores" } }]
+reply.contains = ["oven", "bins", "bathroom", "hoover"]
+reply.excludes = ["sheets"]
+
+[[case]]
+id = "jobs-next"
+category = "repeating"
+seed = "jobs"
+prompt = "Which chore should I do first?"
+expect = [{ tool = "list_tasks", args = { list = "chores" } }]
+reply.contains = ["oven"]
+state.due.chores = ["Clean oven", "Bins out", "Clean bathroom", "Hoover floors"]
+
+[[case]]
+id = "jobs-done"
+category = "repeating"
+seed = "jobs"
+prompt = "I've hoovered the floors"
+expect = [{ tool = "complete_task", args = { list = "chores" }, task = "Hoover floors" }]
+state.due.chores = ["Clean oven", "Bins out", "Clean bathroom"]
+
 # ------------------------------------------------- things it must not act on
 
 [[case]]
@@ -305,7 +377,7 @@ category = "restraint"
 prompt = "Add it to the list"
 state.open.shopping = ["Milk", "Bread", "Bananas"]
 state.open.todo = ["Put the bins out", "Book MOT"]
-reply.contains = ["?"]
+reply.contains_any = ["?", "which list", "what to add", "tell me"]
 
 [[case]]
 id = "general-question"

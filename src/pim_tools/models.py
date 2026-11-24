@@ -13,6 +13,12 @@ class Task(BaseModel):
     title: str
     due: date | None = None
     completed: bool = False
+    repeats: str | None = Field(
+        default=None,
+        description=(
+            "Set on a repeating job, e.g. 'every 7 days'. Completing it schedules its next turn."
+        ),
+    )
 
 
 class TaskList(BaseModel):

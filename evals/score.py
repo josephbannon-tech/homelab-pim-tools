@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from pim_tools.store import MemoryStore
+
 from .server import WRITES, Call, RecordingStore
 
 CASES = Path(__file__).with_name("cases.toml")
@@ -61,9 +63,12 @@ def resolve(value: Any, today: date, tz: ZoneInfo) -> Any:
 def load_cases(today: date, tz: ZoneInfo, path: Path = CASES) -> list[dict[str, Any]]:
     doc = tomllib.loads(path.read_text())
     default_seed = doc.get("seed", {})
+    named = doc.get("seeds", {})
     cases = []
     for raw in doc["case"]:
         case = resolve(raw, today, tz)
+        if isinstance(case.get("seed"), str):  # a seed shared by several cases
+            case["seed"] = resolve(named[case["seed"]], today, tz)
         case.setdefault("seed", resolve(default_seed, today, tz))
         case.setdefault("expect", [])
         cases.append(case)
@@ -163,6 +168,11 @@ def score_case(
         have = sorted(_norm(t.title) for t in store.tasks.get(list_name, []) if not t.completed)
         if have != sorted(_norm(t) for t in titles):
             reasons.append(f"state: open on {list_name} is {have}")
+    for list_name, titles in (state.get("due") or {}).items():
+        # read past the recorder: scoring is not a tool call
+        have = [_norm(t.title) for t in MemoryStore.list_tasks(store, list_name)]
+        if have != [_norm(t) for t in titles]:
+            reasons.append(f"state: due on {list_name} is {have}")
     if "events" in state and len(store.events) != state["events"]:
         reasons.append(f"state: {len(store.events)} events, expected {state['events']}")
 
