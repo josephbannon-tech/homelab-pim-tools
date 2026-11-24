@@ -36,6 +36,10 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 - **Symptom:** `ruff` flagged every FastAPI handler (`B008`, function call in argument default). **Root cause:** `Depends()` and `Query()` in defaults are the framework's contract, which bugbear cannot know. **Fix:** `extend-immutable-calls` for those two, rather than disabling the rule.
 - **Symptom:** `FastApiMCP(app)` raised `Server.__init__() takes 2 positional arguments but 3 were given` on a fresh install. **Root cause:** fastapi-mcp 0.4 targets the 1.x MCP SDK and the SDK's 2.0 release changed the `Server` constructor; pip resolved the newest SDK. **Fix:** pin `mcp>=1.12,<2` beside `fastapi-mcp` with a comment naming the ceiling, plus an end-to-end test that drives `/mcp` with the SDK's own client, so the next bump fails in CI rather than in the chat.
 
+## Eval set
+
+[`evals/`](evals/) holds 30 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
+
 ## Tracing
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector.monitoring.svc:4318`) and every tool call becomes a server span in Tempo under `service.name=pim-tools`, with `/health` excluded. Unset, the SDK is never initialised, so tests and local runs stay silent. In the homelab this is the second OTLP producer after the NAS media pipeline, and the first in-cluster one.
@@ -65,6 +69,7 @@ pip install -e ".[dev]"
 pytest                       # API, auth and MCP tests against the in-memory store
                              # (the MCP test runs a real uvicorn on a loopback port)
 RADICALE_URL=... RADICALE_USER=... RADICALE_PASSWORD=... pytest tests/test_live_caldav.py
+python -m evals.run oracle   # the eval harness end to end, no model needed
 ```
 
 ## Where it fits
