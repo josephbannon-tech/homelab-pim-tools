@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class Task(BaseModel):
     uid: str
-    list: str = Field(description="Task list name, e.g. 'shopping' or 'chores'.")
+    list: str = Field(description="Task list name, e.g. 'shopping'.")
     title: str
     due: date | None = None
     completed: bool = False
@@ -22,7 +22,7 @@ class TaskList(BaseModel):
 
 
 class AddTaskRequest(BaseModel):
-    list: str = Field(description="Task list name: 'shopping' or 'chores'.")
+    list: str = Field(description="Task list name, e.g. 'shopping' or 'todo'.")
     title: str = Field(min_length=1, max_length=200, description="What to add, e.g. 'Milk'.")
     due: date | None = Field(default=None, description="Optional due date, ISO 8601 (YYYY-MM-DD).")
 
