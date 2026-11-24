@@ -28,7 +28,9 @@ class Store(Protocol):
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]: ...
     def add_task(self, list_name: str, title: str, due: date | None) -> tuple[Task, bool]: ...
     def complete_task(self, list_name: str, uid: str) -> Task: ...
-    def list_events(self, start: datetime, end: datetime) -> list[Event]: ...
+    def list_events(
+        self, start: datetime, end: datetime, calendar: str | None = None
+    ) -> list[Event]: ...
     def add_event(
         self, title: str, start: datetime, end: datetime | None, notes: str | None
     ) -> tuple[Event, bool]: ...
@@ -50,6 +52,18 @@ def _utc(dt: datetime) -> datetime:
     return _aware(dt).astimezone(UTC)
 
 
+def _wanted(calendar: str | None, known: tuple[str, ...]) -> tuple[str, ...]:
+    """Which calendars a read covers. None is the first (the appointments
+    calendar, also the only one written to); 'all' is every configured one."""
+    if calendar is None:
+        return known[:1]
+    if calendar == "all":
+        return known
+    if calendar not in known:
+        raise NotFound(calendar)
+    return (calendar,)
+
+
 # --------------------------------------------------------------------------- memory
 
 
@@ -57,6 +71,7 @@ def _utc(dt: datetime) -> datetime:
 class MemoryStore:
     tasks: dict[str, list[Task]] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
+    calendars: tuple[str, ...] = ("personal", "routine")
 
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]:
         items = self.tasks.get(list_name)
@@ -80,10 +95,15 @@ class MemoryStore:
                 return t
         raise NotFound(uid)
 
-    def list_events(self, start: datetime, end: datetime) -> list[Event]:
+    def list_events(
+        self, start: datetime, end: datetime, calendar: str | None = None
+    ) -> list[Event]:
+        wanted = _wanted(calendar, self.calendars)
         start, end = _aware(start), _aware(end)
         out = [
-            e for e in self.events if _aware(e.start) < end and _aware(e.end or e.start) >= start
+            e
+            for e in self.events
+            if e.calendar in wanted and _aware(e.start) < end and _aware(e.end or e.start) >= start
         ]
         return sorted(out, key=lambda e: _aware(e.start))
 
@@ -107,12 +127,20 @@ class CalDAVStore:
     """Radicale over CalDAV. One principal, calendars addressed by their URL leaf
     (`/jbannon/shopping/` -> 'shopping'), which is what the phone apps show."""
 
-    def __init__(self, url: str, username: str, password: str, calendar: str = "personal"):
+    def __init__(
+        self,
+        url: str,
+        username: str,
+        password: str,
+        calendar: str = "personal",
+        extra_calendars: tuple[str, ...] = (),
+    ):
         import caldav  # imported lazily so the API tests need no CalDAV stack
 
         self._client = caldav.DAVClient(url=url, username=username, password=password)
         self._principal = self._client.principal()
         self._event_calendar_name = calendar
+        self._calendars = (calendar, *extra_calendars)
 
     # -- helpers
     def _calendar(self, name: str):
@@ -138,7 +166,7 @@ class CalDAVStore:
         )
 
     @staticmethod
-    def _event_from(ev) -> Event:
+    def _event_from(ev, calendar: str = "personal") -> Event:
         ve = ev.icalendar_component
         start = ve.get("dtstart").dt
         end = ve.get("dtend").dt if ve.get("dtend") is not None else None
@@ -153,6 +181,7 @@ class CalDAVStore:
             start=_aware(start),
             end=_aware(end) if end else None,
             notes=str(desc) if desc else None,
+            calendar=calendar,
         )
 
     # -- tasks
@@ -182,10 +211,16 @@ class CalDAVStore:
         raise NotFound(uid)
 
     # -- events
-    def list_events(self, start: datetime, end: datetime) -> list[Event]:
-        cal = self._calendar(self._event_calendar_name)
-        found = cal.search(start=_aware(start), end=_aware(end), event=True, expand=True)
-        return sorted((self._event_from(e) for e in found), key=lambda e: e.start)
+    def list_events(
+        self, start: datetime, end: datetime, calendar: str | None = None
+    ) -> list[Event]:
+        out: list[Event] = []
+        for name in _wanted(calendar, self._calendars):
+            found = self._calendar(name).search(
+                start=_aware(start), end=_aware(end), event=True, expand=True
+            )
+            out += [self._event_from(e, name) for e in found]
+        return sorted(out, key=lambda e: e.start)
 
     def add_event(
         self, title: str, start: datetime, end: datetime | None, notes: str | None
@@ -205,4 +240,4 @@ class CalDAVStore:
         if notes:
             kwargs["description"] = notes
         ev = cal.save_event(**kwargs)
-        return self._event_from(ev), True
+        return self._event_from(ev, self._event_calendar_name), True

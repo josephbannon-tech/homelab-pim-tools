@@ -33,6 +33,18 @@ title = "Birthday dinner"
 start = "{dt:+9T19:00}"
 end = "{dt:+9T21:00}"
 
+[[seed.events]]
+title = "Language practice"
+start = "{dt:+1T09:00}"
+end = "{dt:+1T10:00}"
+calendar = "routine"
+
+[[seed.events]]
+title = "Language practice"
+start = "{dt:+4T09:00}"
+end = "{dt:+4T10:00}"
+calendar = "routine"
+
 # ------------------------------------------------------------------ add a task
 
 [[case]]
@@ -185,7 +197,7 @@ prompt = "Add dentist on {dayname:+2} at 10am"
 expect = [
   { tool = "add_event", args = { title = { contains = "dentist" }, start = "{dt:+2T10:00}" } },
 ]
-state.events = 4
+state.events = 6
 reply.contains_any = ["10:00", "10am", "10 am"]
 
 [[case]]
@@ -195,7 +207,7 @@ prompt = "Add school play on {dayname:+4} at 18:30"
 expect = [
   { tool = "add_event", args = { title = { contains = "school play" }, start = "{dt:+4T18:30}" } },
 ]
-state.events = 4
+state.events = 6
 
 [[case]]
 id = "add-event-idiom"
@@ -204,7 +216,7 @@ prompt = "Lunch with Priya on {dayname:+5} at half twelve"
 expect = [
   { tool = "add_event", args = { title = { contains = "Priya" }, start = "{dt:+5T12:30}" } },
 ]
-state.events = 4
+state.events = 6
 
 [[case]]
 id = "add-event-end"
@@ -213,7 +225,7 @@ prompt = "Put a swimming lesson in the calendar tomorrow from 4pm to 4:45pm"
 expect = [
   { tool = "add_event", args = { title = { contains = "swimming" }, start = "{dt:+1T16:00}", end = "{dt:+1T16:45}" } },
 ]
-state.events = 4
+state.events = 6
 
 [[case]]
 id = "add-event-notes"
@@ -222,7 +234,7 @@ prompt = "Add a vet appointment on {nice:+6} at 9:30, note: bring the vaccinatio
 expect = [
   { tool = "add_event", args = { title = { contains = "vet" }, start = "{dt:+6T09:30}", notes = { contains = "vaccination card" } } },
 ]
-state.events = 4
+state.events = 6
 
 [[case]]
 id = "add-event-duplicate"
@@ -231,7 +243,7 @@ prompt = "Add boiler service tomorrow at 2pm"
 expect = [
   { tool = "add_event", args = { title = "boiler service", start = "{dt:+1T14:00}" }, optional = true },
 ]
-state.events = 3
+state.events = 5
 
 # ---------------------------------------------------------------- read events
 
@@ -242,6 +254,20 @@ prompt = "What's on tomorrow?"
 expect = [{ tool = "list_events", covers = "{dt:+1T14:00}" }]
 reply.contains = ["boiler"]
 reply.excludes = ["parents", "birthday"]
+
+[[case]]
+id = "list-events-routine"
+category = "list_events"
+prompt = "What time is my language block tomorrow?"
+expect = [{ tool = "list_events", covers = "{dt:+1T09:00}", args = { calendar = { any = ["routine", "all"] } } }]
+reply.contains_any = ["9:00", "09:00", "9am", "9 am"]
+
+[[case]]
+id = "list-events-busy"
+category = "list_events"
+prompt = "Am I free at 9:30 on {dayname:+4}?"
+expect = [{ tool = "list_events", covers = "{dt:+4T09:30}", args = { calendar = "all" } }]
+reply.contains = ["language"]
 
 [[case]]
 id = "list-events-week"
@@ -268,7 +294,7 @@ reply.excludes = ["boiler", "parents"]
 id = "refuse-no-delete-tool"
 category = "restraint"
 prompt = "Cancel the boiler service"
-state.events = 3
+state.events = 5
 reply.contains_any = [
   "can't", "cannot", "couldn't", "could not", "unable", "not able", "can only", "don't have", "no way to", "no tool",
 ]
@@ -285,7 +311,7 @@ reply.contains = ["?"]
 id = "general-question"
 category = "restraint"
 prompt = "What's the capital of France?"
-state.events = 3
+state.events = 5
 reply.contains = ["Paris"]
 
 [[case]]

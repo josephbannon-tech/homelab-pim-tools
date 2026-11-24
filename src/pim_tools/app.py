@@ -47,6 +47,11 @@ def _default_store() -> Store:
         username=os.environ["RADICALE_USER"],
         password=os.environ["RADICALE_PASSWORD"],
         calendar=os.environ.get("RADICALE_CALENDAR", "personal"),
+        extra_calendars=tuple(
+            c.strip()
+            for c in os.environ.get("RADICALE_EXTRA_CALENDARS", "").split(",")
+            if c.strip()
+        ),
     )
 
 
@@ -115,8 +120,10 @@ def complete_task(req: CompleteTaskRequest, store: Store = Depends(get_store)) -
     operation_id="list_events",
     summary="List calendar events in a time range",
     description=(
-        "Returns events on the personal calendar between two ISO 8601 timestamps. "
-        "Defaults to the next 7 days."
+        "Returns appointments on the personal calendar between two ISO 8601 timestamps. "
+        "Defaults to the next 7 days. Recurring daily routine blocks (work, meals, "
+        "exercise) are on a separate calendar: pass calendar='routine' to read those, "
+        "or calendar='all' for both, which is what to use when checking if a time is free."
     ),
     response_model=EventList,
     response_model_by_alias=True,
@@ -124,14 +131,20 @@ def complete_task(req: CompleteTaskRequest, store: Store = Depends(get_store)) -
 def list_events(
     start: datetime | None = Query(None, alias="from"),
     end: datetime | None = Query(None, alias="to"),
+    calendar: str | None = Query(
+        None, description="Omit for appointments only; 'routine' or 'all' to widen."
+    ),
     store: Store = Depends(get_store),
 ) -> EventList:
     start = start or datetime.now(UTC)
     end = end or start + timedelta(days=7)
     if end <= start:
         raise HTTPException(422, "'to' must be after 'from'")
-    events = store.list_events(start, end)
-    return EventList(calendar="personal", **{"from": start}, to=end, events=events)
+    try:
+        events = store.list_events(start, end, calendar)
+    except NotFound as e:
+        raise HTTPException(404, f"no calendar named {e}; use 'routine' or 'all'") from e
+    return EventList(calendar=calendar or "personal", **{"from": start}, to=end, events=events)
 
 
 @app.post(

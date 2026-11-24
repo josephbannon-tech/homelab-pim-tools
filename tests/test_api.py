@@ -92,3 +92,27 @@ def test_tracing_off_without_endpoint(monkeypatch):
 
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     assert telemetry.configure(app) is False
+
+
+def test_routine_blocks_are_a_separate_calendar():
+    from pim_tools.models import Event
+
+    day = datetime(2026, 10, 2, tzinfo=UTC)
+    store = MemoryStore(
+        events=[
+            Event(uid="a", title="Dentist", start=day.replace(hour=10)),
+            Event(uid="b", title="Lunch", start=day.replace(hour=12), calendar="routine"),
+        ]
+    )
+    app.dependency_overrides[get_store] = lambda: store
+    c = TestClient(app)
+    window = {"from": "2026-10-02T00:00:00Z", "to": "2026-10-03T00:00:00Z"}
+
+    def titles(**extra):
+        return [e["title"] for e in c.get("/events", params={**window, **extra}).json()["events"]]
+
+    assert titles() == ["Dentist"]
+    assert titles(calendar="routine") == ["Lunch"]
+    assert titles(calendar="all") == ["Dentist", "Lunch"]
+    assert c.get("/events", params={**window, "calendar": "work"}).status_code == 404
+    app.dependency_overrides.clear()
