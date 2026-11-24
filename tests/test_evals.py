@@ -2,7 +2,7 @@
 with a brain that does the right thing, and the gate fires on a wrong write.
 No model is involved; real scored runs happen where a model is reachable."""
 
-from datetime import date
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -20,7 +20,8 @@ TODAY = date(2026, 6, 15)
 
 @pytest.fixture(scope="module")
 def server():
-    with EvalServer() as s:
+    # the cases are resolved against TODAY, so the store's clock is pinned to it too
+    with EvalServer(clock=lambda: datetime.combine(TODAY, time(12), tzinfo=TZ)) as s:
         yield s
 
 

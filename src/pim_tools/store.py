@@ -8,16 +8,22 @@ Idempotency lives here, not in the prompt: adding a task whose title matches an
 open task on the same list (case-insensitive, same due date) returns the
 existing task with created=False; the same for an event with equal title and
 start. A retrying LLM cannot create duplicates.
+
+A task list can hold repeating jobs (see repeat.py). For those, list_tasks
+returns the ones due now in the order to do them, and complete_task
+reschedules the job instead of closing it.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
 from .models import Event, Task
+from .repeat import Job, describe, in_order, settle
 
 
 class NotFound(Exception):
@@ -29,6 +35,7 @@ class Store(Protocol):
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]: ...
     def add_task(self, list_name: str, title: str, due: date | None) -> tuple[Task, bool]: ...
     def complete_task(self, list_name: str, uid: str) -> Task: ...
+    def sweep(self, list_name: str) -> int: ...
     def list_events(
         self, start: datetime, end: datetime, calendar: str | None = None
     ) -> list[Event]: ...
@@ -43,6 +50,26 @@ def _norm(s: str) -> str:
 
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _job_task(list_name: str, job: Job, jobs: list[Job], done: bool) -> Task:
+    return Task(
+        uid=job.uid, list=list_name, title=job.title, completed=done, repeats=describe(job, jobs)
+    )
+
+
+def _job_view(list_name: str, jobs: list[Job], now: datetime, include_done: bool) -> list[Task]:
+    """Due jobs, first one first. With include_done, the jobs that are not due
+    follow as completed: done for now is what 'completed' means for a job."""
+    out = [_job_task(list_name, j, jobs, False) for j in in_order(jobs, now)]
+    if include_done:
+        rest = sorted((j for j in jobs if not j.is_due(now)), key=lambda j: (j.due, j.rank))
+        out += [_job_task(list_name, j, jobs, True) for j in rest]
+    return out
 
 
 def _utc(dt: datetime) -> datetime:
@@ -73,15 +100,48 @@ class MemoryStore:
     tasks: dict[str, list[Task]] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
     calendars: tuple[str, ...] = ("personal", "routine")
+    jobs: dict[str, Job] = field(default_factory=dict)  # repeating jobs, by task uid
+    clock: Callable[[], datetime] = _now
 
     def task_lists(self) -> list[str]:
         return sorted(self.tasks)
+
+    def add_job(
+        self,
+        list_name: str,
+        title: str,
+        every: timedelta,
+        rank: int,
+        due: datetime | None = None,
+        after: str | None = None,
+        resets: str | None = None,
+    ) -> Job:
+        """Seed a repeating job (tests and evals; production jobs are loaded
+        into the CalDAV server directly)."""
+        from .repeat import WAITING
+
+        start = due or (WAITING if after else self.clock())
+        job = Job(str(uuid.uuid4()), title, rank, every, _aware(start), after, resets)
+        self.tasks.setdefault(list_name, []).append(Task(uid=job.uid, list=list_name, title=title))
+        self.jobs[job.uid] = job
+        return job
+
+    def _jobs(self, list_name: str) -> list[Job]:
+        return [self.jobs[t.uid] for t in self.tasks.get(list_name, []) if t.uid in self.jobs]
+
+    def sweep(self, list_name: str) -> int:
+        return len(settle(self._jobs(list_name), self.clock()))
 
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]:
         items = self.tasks.get(list_name)
         if items is None:
             raise NotFound(list_name)
-        return [t for t in items if include_completed or not t.completed]
+        jobs = self._jobs(list_name)
+        settle(jobs, self.clock())
+        plain = [t for t in items if t.uid not in self.jobs]
+        return _job_view(list_name, jobs, self.clock(), include_completed) + [
+            t for t in plain if include_completed or not t.completed
+        ]
 
     def add_task(self, list_name: str, title: str, due: date | None) -> tuple[Task, bool]:
         items = self.tasks.setdefault(list_name, [])
@@ -95,6 +155,13 @@ class MemoryStore:
     def complete_task(self, list_name: str, uid: str) -> Task:
         for t in self.tasks.get(list_name, []):
             if t.uid == uid:
+                if uid in self.jobs:
+                    jobs, now = self._jobs(list_name), self.clock()
+                    job = self.jobs[uid]
+                    if job.is_due(now):  # ticking a job that is not due changes nothing
+                        job.done_at = now
+                        settle(jobs, now)
+                    return _job_task(list_name, job, jobs, True)
                 t.completed = True
                 return t
         raise NotFound(uid)
@@ -125,6 +192,8 @@ class MemoryStore:
 
 
 # --------------------------------------------------------------------------- caldav
+
+_STAMP = "%Y%m%dT%H%M%SZ"
 
 
 class CalDAVStore:
@@ -194,10 +263,82 @@ class CalDAVStore:
         leaves = (str(c.url).rstrip("/").rsplit("/", 1)[-1] for c in self._principal.calendars())
         return sorted(leaf for leaf in leaves if leaf not in self._calendars)
 
+    # -- repeating jobs: the interval and rank ride on the VTODO as X- properties
+    @staticmethod
+    def _job_from(todo, now: datetime) -> Job | None:
+        from icalendar import vDuration
+
+        vt = todo.icalendar_component
+        every = vt.get("x-chore-every")
+        if every is None:
+            return None
+        due = vt.get("x-chore-due")
+        done_at = None
+        if str(vt.get("status", "")).upper() == "COMPLETED":
+            stamp = vt.get("completed")
+            done_at = _aware(stamp.dt) if stamp is not None else now
+        pos = vt.get("x-apple-sort-order")
+        return Job(
+            uid=str(vt.get("uid")),
+            title=str(vt.get("summary", "")),
+            rank=int(str(vt.get("x-chore-rank", "999"))),
+            every=vDuration.from_ical(str(every)),
+            due=datetime.strptime(str(due), _STAMP).replace(tzinfo=UTC) if due else now,
+            after=str(vt.get("x-chore-after")) if vt.get("x-chore-after") else None,
+            resets=str(vt.get("x-chore-resets")) if vt.get("x-chore-resets") else None,
+            done_at=done_at,
+            position=int(str(pos)) if pos is not None and str(pos).isdigit() else None,
+        )
+
+    @staticmethod
+    def _write_job(todo, job: Job, now: datetime) -> None:
+        """Store a job as open, due at job.due. A future DTSTART is what task
+        apps read as 'hide until'; X-APPLE-SORT-ORDER is their manual order."""
+        from caldav.lib import error as caldav_error
+
+        vt = todo.icalendar_component
+        for gone in (
+            "completed",
+            "percent-complete",
+            "dtstart",
+            "x-chore-due",
+            "x-apple-sort-order",
+        ):
+            vt.pop(gone, None)
+        vt["status"] = "NEEDS-ACTION"
+        vt.add("x-chore-due", job.due.strftime(_STAMP))
+        if job.due > now:
+            vt.add("dtstart", job.due)
+        if job.position is not None:
+            vt.add("x-apple-sort-order", str(job.position))
+        try:
+            todo.save()
+        except caldav_error.ETagMismatchError:
+            # Edited on a phone between our read and this write. Theirs stands;
+            # the next pass reads it fresh and settles it then.
+            pass
+
+    def _settled(self, list_name: str, now: datetime) -> tuple[list[Job], list, int]:
+        """(jobs, the other todos, how many jobs were rewritten)."""
+        todos = self._calendar(list_name).todos(include_completed=True)
+        pairs = [(t, self._job_from(t, now)) for t in todos]
+        jobs = [j for _, j in pairs if j is not None]
+        changed = settle(jobs, now)
+        for todo, job in pairs:
+            if job is not None and job.uid in changed:
+                self._write_job(todo, job, now)
+        return jobs, [t for t, j in pairs if j is None], len(changed)
+
+    def sweep(self, list_name: str) -> int:
+        return self._settled(list_name, _now())[2]
+
     def list_tasks(self, list_name: str, include_completed: bool = False) -> list[Task]:
-        cal = self._calendar(list_name)
-        todos = cal.todos(include_completed=include_completed)
-        return [self._task_from(list_name, t) for t in todos]
+        now = _now()
+        jobs, plain, _ = self._settled(list_name, now)
+        tasks = [self._task_from(list_name, t) for t in plain]
+        return _job_view(list_name, jobs, now, include_completed) + [
+            t for t in tasks if include_completed or not t.completed
+        ]
 
     def add_task(self, list_name: str, title: str, due: date | None) -> tuple[Task, bool]:
         cal = self._calendar(list_name)
@@ -212,11 +353,25 @@ class CalDAVStore:
 
     def complete_task(self, list_name: str, uid: str) -> Task:
         cal = self._calendar(list_name)
-        for todo in cal.todos(include_completed=False):
-            if str(todo.icalendar_component.get("uid")) == uid:
+        now = _now()
+        for todo in cal.todos(include_completed=True):
+            if str(todo.icalendar_component.get("uid")) != uid:
+                continue
+            job = self._job_from(todo, now)
+            if job is None:
+                if str(todo.icalendar_component.get("status", "")).upper() == "COMPLETED":
+                    break
                 todo.complete()
                 todo.load()
                 return self._task_from(list_name, todo)
+            if job.done_at is None and job.is_due(now):
+                todo.icalendar_component["status"] = "COMPLETED"
+                todo.icalendar_component.pop("completed", None)
+                todo.icalendar_component.add("completed", now)
+                todo.save()
+            jobs, _, _ = self._settled(list_name, now)
+            mine = next(j for j in jobs if j.uid == uid)
+            return _job_task(list_name, mine, jobs, True)
         raise NotFound(uid)
 
     # -- events

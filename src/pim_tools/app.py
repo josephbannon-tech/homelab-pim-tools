@@ -4,6 +4,9 @@ the model reads, so they are written for the model, not for a human."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -27,9 +30,48 @@ from .models import (
 from .store import NotFound, Store
 from .telemetry import configure as configure_telemetry
 
+log = logging.getLogger("pim_tools")
+
+# Lists holding repeating jobs, swept in the background. A job ticked on a
+# phone goes straight to the CalDAV server and never passes through this
+# service, so something has to notice it and schedule its next turn.
+SWEEP_LISTS = tuple(
+    s.strip() for s in os.environ.get("PIM_SWEEP_LISTS", "").split(",") if s.strip()
+)
+SWEEP_SECONDS = float(os.environ.get("PIM_SWEEP_SECONDS", "300"))
+
+
+def sweep_once(store: Store, lists: tuple[str, ...] = SWEEP_LISTS) -> int:
+    """One pass over the configured lists. A list that fails is logged and
+    skipped; the next pass tries again."""
+    rewritten = 0
+    for name in lists:
+        try:
+            rewritten += store.sweep(name)
+        except Exception:
+            log.exception("sweep of %s failed", name)
+    return rewritten
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_: FastAPI):
+    async def loop() -> None:
+        while True:
+            await asyncio.to_thread(sweep_once, get_store())
+            await asyncio.sleep(SWEEP_SECONDS)
+
+    task = asyncio.create_task(loop()) if SWEEP_LISTS else None
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+
+
 app = FastAPI(
     title="pim-tools",
     version=__version__,
+    lifespan=lifespan,
     description=(
         "Ground-truth tools over a personal calendar and task lists. "
         "Every write returns the stored object; only report what it says."
@@ -81,7 +123,10 @@ def health() -> dict[str, str]:
     summary="List the open tasks on a task list",
     description=(
         "Returns the open items on a task list, by name (for example 'shopping'). "
-        "An unknown name returns the names that exist."
+        "An unknown name returns the names that exist. "
+        "A list of repeating jobs (for example 'chores') returns only the jobs due now, "
+        "in the order to do them: the first one is the next job. With include_completed, "
+        "jobs that are done for now follow as completed."
     ),
     response_model=TaskList,
 )
@@ -119,7 +164,10 @@ def add_task(req: AddTaskRequest, store: Store = Depends(get_store)) -> AddTaskR
     "/tasks/complete",
     operation_id="complete_task",
     summary="Mark a task as done",
-    description="Completes a task by uid (get the uid from list_tasks first).",
+    description=(
+        "Completes a task by uid (get the uid from list_tasks first). "
+        "A repeating job is not closed: it comes back when it is next due."
+    ),
     response_model=Task,
 )
 def complete_task(req: CompleteTaskRequest, store: Store = Depends(get_store)) -> Task:

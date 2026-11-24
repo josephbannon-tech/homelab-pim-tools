@@ -30,6 +30,7 @@ Exit status is the gate. A run passes when at least 90% of cases pass and no bad
 | `complete_task` | 5 | list then complete by uid, two at once, an item that is not there, "tick off the second one" after an earlier answer |
 | `add_event` | 6 | 12 and 24 hour times, "half twelve", an end time, notes, a duplicate |
 | `list_events` | 5 | tomorrow, the next seven days, "am I free" on an empty morning, a routine block by name, a slot that only a routine block fills |
+| `repeating` | 3 | the jobs due now, which one comes first when a late job has climbed, ticking one off |
 | `restraint` | 4 | a delete it has no tool for, a request with no referent, a general question, a task title that contains an injected instruction |
 
 Cases live in [`cases.toml`](cases.toml), with the matcher syntax at the top of the file.
@@ -46,6 +47,8 @@ Scored runs, 2026-11-23, on the first 30 cases:
 | The same CPU model with a firmer system prompt | harness tool loop, REST door | 26/30 | 2 | 39.8 s | fail |
 
 Only Claude passes, so the model swap stays closed.
+
+v0.5.0 added repeating jobs and three cases for them, with no new tools. Claude on the 35 cases, 2026-11-24: 34 of 35, 0 bad writes, median 3.7 s. The miss was `refuse-ambiguous`, where the reply asked what to add and which list as a numbered request with no question mark; the case now accepts that wording.
 
 v0.4.1 made the unknown-list 404 name the lists that exist (the failure both GPU and firmer-prompt runs made); Claude again 32 of 32. v0.4.0 added the routine calendar and two cases for it. Claude on the 32 cases, 2026-11-24: 32 of 32, 0 bad writes, median 6.7 s.
 

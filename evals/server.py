@@ -11,12 +11,13 @@ recorded; it changed nothing, and the model saw the error.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -78,6 +79,8 @@ class RecordingStore(MemoryStore):
             already = next(
                 (t.completed for t in self.tasks.get(list_name, []) if t.uid == uid), False
             )
+            if uid in self.jobs:  # a repeating job not due is already done for now
+                already = not self.jobs[uid].is_due(self.clock())
             task = super().complete_task(list_name, uid)
         except NotFound:
             call.ok = False
@@ -102,11 +105,15 @@ class RecordingStore(MemoryStore):
         return event, created
 
 
-def seeded_store(seed: dict[str, Any]) -> RecordingStore:
-    """Build a store from a resolved seed: {tasks: {list: [..]}, events: [..]}.
-    A task is a title or {title, due, completed}; uids are opaque on purpose so
-    a model has to read them from list_tasks."""
+def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
+    """Build a store from a resolved seed: {tasks: {list: [..]}, events: [..],
+    jobs: [..]}. A task is a title or {title, due, completed}; uids are opaque on
+    purpose so a model has to read them from list_tasks. A job is a repeating
+    task: {list, title, rank, every ('7d' or '1h'), due, after, resets}, the
+    last two naming another job by title."""
     store = RecordingStore()
+    if clock is not None:  # a run pinned to a day that is not today
+        store.clock = clock
     for list_name, items in (seed.get("tasks") or {}).items():
         store.tasks[list_name] = []
         for item in items:
@@ -131,13 +138,27 @@ def seeded_store(seed: dict[str, Any]) -> RecordingStore:
                 calendar=ev.get("calendar", "personal"),
             )
         )
+    by_title: dict[str, str] = {}
+    for j in seed.get("jobs") or []:
+        n, unit = re.fullmatch(r"(\d+)([dh])", j["every"]).groups()
+        job = store.add_job(
+            j["list"],
+            j["title"],
+            timedelta(days=int(n)) if unit == "d" else timedelta(hours=int(n)),
+            rank=j["rank"],
+            due=datetime.fromisoformat(j["due"]) if j.get("due") else None,
+            after=by_title.get(j.get("after", "")),
+            resets=by_title.get(j.get("resets", "")),
+        )
+        by_title[j["title"]] = job.uid
     return store
 
 
 class EvalServer:
     """One uvicorn for the whole run; each case swaps in a fresh store."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock=None) -> None:
+        self.clock = clock
         self.store = RecordingStore()
         self.url = ""
         self._server: uvicorn.Server | None = None
@@ -168,5 +189,5 @@ class EvalServer:
         app.dependency_overrides.pop(get_store, None)
 
     def reset(self, seed: dict[str, Any]) -> RecordingStore:
-        self.store = seeded_store(seed)
+        self.store = seeded_store(seed, self.clock)
         return self.store
