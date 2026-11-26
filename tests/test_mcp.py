@@ -25,6 +25,9 @@ TOOLS = {
     "add_event",
     "change_event",
     "cancel_event",
+    "list_notes",
+    "read_note",
+    "append_note",
 }
 
 

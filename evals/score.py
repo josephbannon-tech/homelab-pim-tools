@@ -188,6 +188,19 @@ def score_case(
         )
         if found != present:
             reasons.append(f"state: {want} is {'missing' if present else 'still there'}")
+    for want in state.get("note") or []:
+        path = Path(store.notes.root, want["name"] + ".md") if hasattr(store, "notes") else None
+        text = _norm(path.read_text()) if path and path.exists() else None
+        if want.get("absent"):
+            if text is not None:
+                reasons.append(f"state: note {want['name']} was created")
+            continue
+        if text is None:
+            reasons.append(f"state: note {want['name']} is missing")
+            continue
+        for s in want.get("contains", []):
+            if _norm(s) not in text:
+                reasons.append(f"state: note {want['name']} lacks {s!r}")
     if "events" in state and len(store.events) != state["events"]:
         reasons.append(f"state: {len(store.events)} events, expected {state['events']}")
 

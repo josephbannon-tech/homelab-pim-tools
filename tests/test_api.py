@@ -86,6 +86,9 @@ def test_openapi_operation_ids_are_the_tool_names(client):
         "add_event",
         "change_event",
         "cancel_event",
+        "list_notes",
+        "read_note",
+        "append_note",
     }
 
 

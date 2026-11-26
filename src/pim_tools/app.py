@@ -21,6 +21,8 @@ from .models import (
     AddEventResult,
     AddTaskRequest,
     AddTaskResult,
+    AppendNoteRequest,
+    AppendNoteResult,
     CancelEventResult,
     ChangeEventRequest,
     ChangeEventResult,
@@ -28,9 +30,12 @@ from .models import (
     Event,
     EventList,
     EventRef,
+    Note,
+    NoteList,
     Task,
     TaskList,
 )
+from .notes import BadName, NoNotes, NoSuchNote, NoteFile, Notes
 from .store import NotFound, Store, Unsupported
 from .telemetry import configure as configure_telemetry
 
@@ -103,6 +108,22 @@ def _default_store() -> Store:
 
 def get_store() -> Store:
     return _default_store()
+
+
+@lru_cache(maxsize=1)
+def _default_notes() -> Notes | None:
+    root = os.environ.get("NOTES_DIR", "").strip()
+    if not root:
+        return None
+    exclude = tuple(s.strip() for s in os.environ.get("NOTES_EXCLUDE", "").split(",") if s.strip())
+    return Notes(root, exclude)
+
+
+def get_notes() -> Notes:
+    notes = _default_notes()
+    if notes is None:
+        raise NoNotes()
+    return notes
 
 
 def _no_such_list(name: NotFound, store: Store) -> HTTPException:
@@ -304,9 +325,85 @@ def cancel_event(req: EventRef, store: Store = Depends(get_store)) -> CancelEven
     return CancelEventResult(cancelled=gone, scope=_scope(gone))
 
 
+def _note(n: NoteFile) -> Note:
+    return Note(name=n.name, modified=n.modified, size=n.size, text=n.text, truncated=n.truncated)
+
+
+def _no_such_note(e: NoSuchNote) -> HTTPException:
+    shown = ", ".join(f"'{k}'" for k in e.known[:40]) or "none"
+    return HTTPException(
+        404,
+        f"no note named '{e.name}'. The notes are: {shown}. "
+        "Do not add to a different note, or create one, without asking.",
+    )
+
+
+@app.exception_handler(NoNotes)
+async def _notes_off(_, __):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"detail": "notes are not set up on this server"}, status_code=503)
+
+
+@app.get(
+    "/notes",
+    operation_id="list_notes",
+    summary="List the user's notes, or find the ones that mention something",
+    description=(
+        "Returns the names of the user's notes (markdown files, such as a packing list or "
+        "reference notes). Give query to return only notes whose name or text contains it. "
+        "Notes are free text; things to tick off live on task lists instead."
+    ),
+    response_model=NoteList,
+)
+def list_notes(
+    query: str | None = Query(None, description="Words to look for in names and text."),
+    notes: Notes = Depends(get_notes),
+) -> NoteList:
+    return NoteList(notes=[_note(n) for n in notes.list(query)])
+
+
+@app.get(
+    "/notes/read",
+    operation_id="read_note",
+    summary="Read one note",
+    description="Returns a note's text, by name. An unknown name returns the names that exist.",
+    response_model=Note,
+)
+def read_note(
+    name: str = Query(description="The note's name, from list_notes."),
+    notes: Notes = Depends(get_notes),
+) -> Note:
+    try:
+        return _note(notes.read(name))
+    except NoSuchNote as e:
+        raise _no_such_note(e) from e
+
+
+@app.post(
+    "/notes/append",
+    operation_id="append_note",
+    summary="Add text to the end of a note",
+    description=(
+        "Appends text to an existing note. It cannot change or remove what is already "
+        "there; tell the user to edit the note themselves for that. Use the note's own "
+        "style: a checklist note takes a line like '- [ ] Item'."
+    ),
+    response_model=AppendNoteResult,
+)
+def append_note(req: AppendNoteRequest, notes: Notes = Depends(get_notes)) -> AppendNoteResult:
+    try:
+        note, created = notes.append(req.name, req.text, req.create)
+    except NoSuchNote as e:
+        raise _no_such_note(e) from e
+    except BadName as e:
+        raise HTTPException(422, f"'{e}' cannot be used as a note name") from e
+    return AppendNoteResult(note=_note(note), created=created)
+
+
 _ = Event  # re-exported for type checkers
 
-# Second door: the same seven operations as MCP tools (Streamable HTTP at /mcp),
+# Second door: the same ten operations as MCP tools (Streamable HTTP at /mcp),
 # generated from the routes above so there is one definition of each tool.
 # Mounted after the routes, which fastapi-mcp reads at construction time.
 FastApiMCP(app, name="pim-tools").mount_http()

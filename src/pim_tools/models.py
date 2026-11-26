@@ -106,3 +106,32 @@ class ChangeEventResult(BaseModel):
 class CancelEventResult(BaseModel):
     cancelled: Event = Field(description="The event that was removed.")
     scope: str = Field(description="What was affected: one day of a series, or a single event.")
+
+
+class Note(BaseModel):
+    name: str = Field(description="The note's name, e.g. 'Festival packing list'.")
+    modified: datetime
+    size: int = Field(description="Size in bytes.")
+    text: str | None = Field(default=None, description="The note's text (markdown).")
+    truncated: bool = Field(
+        default=False, description="True when the note was too long to return whole."
+    )
+
+
+class NoteList(BaseModel):
+    notes: list[Note]
+
+
+class AppendNoteRequest(BaseModel):
+    name: str = Field(description="The note to add to, by name from list_notes.")
+    text: str = Field(min_length=1, max_length=4000, description="The text to add at the end.")
+    create: bool = Field(
+        default=False,
+        description="Set true only when the user asked for a new note. "
+        "Otherwise a name that matches no note is refused.",
+    )
+
+
+class AppendNoteResult(BaseModel):
+    note: Note = Field(description="The note as it now stands (its last part, if long).")
+    created: bool = Field(description="True when this call made a new note.")

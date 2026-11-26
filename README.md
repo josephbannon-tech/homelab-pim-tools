@@ -15,10 +15,13 @@ It exists because retrieval over personal data is the wrong tool for the job. An
 | `add_event` | POST | `/events` | title + start |
 | `change_event` | POST | `/events/change` | the values asked for (`changed: false` when already so) |
 | `cancel_event` | POST | `/events/cancel` | n/a (a second call is a 404) |
+| `list_notes` | GET | `/notes?query=` | n/a |
+| `read_note` | GET | `/notes/read?name=` | n/a |
+| `append_note` | POST | `/notes/append` | no: each call adds its text |
 
 The OpenAPI document at `/openapi.json` is the integration surface. Open WebUI registers it as an external tool server and turns each `operationId` into a tool, so the operation ids and descriptions are written for the model, not for a human reader.
 
-The same seven operations are served as MCP tools at `/mcp` (Streamable HTTP) for clients that speak MCP rather than OpenAPI, which in the homelab is Claude Code running headless behind the chat. The tools are generated from the routes above, so there is one definition of each operation and two doors onto it.
+The same ten operations are served as MCP tools at `/mcp` (Streamable HTTP) for clients that speak MCP rather than OpenAPI, which in the homelab is Claude Code running headless behind the chat. The tools are generated from the routes above, so there is one definition of each operation and two doors onto it.
 
 With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` on every request except `/health` and `/openapi.json`. Unset, the server is open, which is the posture for in-cluster callers only.
 
@@ -32,6 +35,8 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 - **Repeating jobs count from when they were last done.** A calendar rule repeats on fixed dates; a household job is due a week after it was last done, whenever that was. A task that carries an interval (`X-CHORE-EVERY`) and a rank is a repeating job: ticking it does not close it, it sets the next due time and hides the task until then with a future `DTSTART`, which task apps read as "hide until". `list_tasks` returns only the jobs due now, in the order to do them, so the question "what next?" has one answer. Two links cover the cases a single interval cannot: `after` (hang the washing out an hour after the wash went on) and `resets` (a deep clean restarts the weekly one). The model gets no new tools for any of this, only two sentences in existing descriptions.
 - **Late jobs climb, measured against their own interval.** Jobs are shown in one agreed rank order, decided in advance so nothing is decided at the time. Rank alone would starve the quarterly jobs, because the weekly ones keep returning above them. So a job's rank shrinks in proportion to how late it is, and reaches the top when it is a whole interval late: a weekly job a week late and a quarterly job three months late have both been skipped once.
 - **The server sweeps, because the phone does not ask.** A job ticked in a phone app is written straight to the CalDAV server and never passes through this service. A background pass every five minutes finds ticked jobs, reschedules them and follows their links. Display order (`X-APPLE-SORT-ORDER`) is rewritten only when the relative order of the visible jobs is wrong, not on every pass, so an idle list costs no writes and no phone resyncs. Writes carry the ETag; if the phone edited the task in between, the phone's version stands and the next pass settles it.
+- **Notes are a folder of markdown files, and the assistant can only add to them.** The notes live in a folder that Syncthing keeps on the phone, where any markdown editor opens them; this service mounts the same folder. `append_note` adds text at the end and nothing else: no overwrite, no rename, no delete, so the worst a wrong call can do is a stray line the owner removes. Appending to a name that matches no note is refused with the names that exist, unless the call says to create one, because a misheard name should not quietly become a new file. Writes go to a temporary file that is swapped in, so the sync tool never ships half a note.
+- **A private folder the tools cannot see.** Folders named in `NOTES_EXCLUDE` are not listed, searched, read or written, and the refusal does not admit they exist. Everything the assistant reads leaves the house in a prompt, so the line between what it may see and what it may not is a folder the owner controls from the phone, and it is enforced here, not in the prompt. Two eval cases hold it: a question about a private note must not surface its contents.
 - **Store behind a `Protocol`, tested twice.** The HTTP layer is tested against an in-memory store (fast, no server). The CalDAV store has a separate round-trip test that runs only when `RADICALE_URL` is set, so CI stays hermetic and the live behaviour is still checked before a release.
 - **MCP generated from the OpenAPI routes, not written twice.** fastapi-mcp turns each route into a tool named after its `operationId`, with the descriptions and schemas the OpenAPI door already exposes, and invokes the route in-process with the caller's bearer forwarded. A hand-written MCP server would be a second copy of the tool contract, and copies drift.
 - **A shared-secret bearer token, not identity.** v1 had no auth and stayed on a ClusterIP for that reason. The token (v0.3) lets the service sit on a NodePort for an MCP client on another host without letting anything else on the LAN write to the calendar. It says a caller is trusted, not who they are, which is all a single-user tool needs. The gate is a pure ASGI middleware because Starlette's `BaseHTTPMiddleware` buffers response bodies and the MCP transport streams.
@@ -45,7 +50,7 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 
 ## Eval set
 
-[`evals/`](evals/) holds 41 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
+[`evals/`](evals/) holds 46 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
 
 ## Tracing
 
@@ -59,6 +64,8 @@ export RADICALE_CALENDAR=personal   # the events calendar; task lists are addres
 export RADICALE_EXTRA_CALENDARS=routine   # optional, read-only: list_events calendar=routine|all
 export PIM_SWEEP_LISTS=chores       # optional: task lists holding repeating jobs, swept every
 export PIM_SWEEP_SECONDS=300        # this many seconds for jobs ticked on a phone
+export NOTES_DIR=/vault             # optional: a folder of markdown notes (the notes tools answer 503 without it)
+export NOTES_EXCLUDE=Private        # optional: top-level folders the notes tools must never see
 export PIM_TOOLS_TOKEN=...          # optional; omit for the open, in-cluster-only posture
 uvicorn pim_tools.app:app --host 0.0.0.0 --port 8000
 ```
