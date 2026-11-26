@@ -277,8 +277,10 @@ def list_events(
     summary="Add a calendar event",
     description=(
         "Creates an event. Give start as ISO 8601 with a timezone; end defaults to one hour "
-        "later. Name a calendar to file it as a kind of event (each has its own colour); "
-        "omit it for the default. Idempotent on (title, start)."
+        "later. Calendars other than the default are named for kinds of event, each with "
+        "its own colour (list_calendars): when the event plainly is one of those kinds (a "
+        "birthday is social, a dentist is health), put it on that calendar; otherwise omit "
+        "calendar for the default. Idempotent on (title, start)."
     ),
     response_model=AddEventResult,
 )

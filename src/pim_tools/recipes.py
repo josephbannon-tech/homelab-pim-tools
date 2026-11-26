@@ -52,6 +52,14 @@ INDEX_COLUMNS = {"effort": "effort", "kcal_per_serving": "kcal"}
 # Sections of a weekly list that are not things to buy.
 NOT_SHOPPING = ("this week", "lunches covered", "banked")
 CHECK = "check you have"
+# A comma-separated piece that is only an amount ("300 g", "1 tsp", "½ bunch")
+# belongs to the item before it, not a second item.
+_AMOUNT = re.compile(
+    r"\A(?:[\d½¼¾⅓⅔.,/\-– ]+|a few|a little|a pinch|a knob|a splash|half a?)\s*"
+    r"(?:g|kg|ml|l|litres?|tsp|tbsp|teaspoons?|tablespoons?|cups?|tins?|cans?|jars?|"
+    r"packs?|bunch(?:es)?|pinch(?:es)?|cloves?|large|small|medium|of (?:it|them))?\.?\Z",
+    re.I,
+)
 
 _FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 
@@ -160,7 +168,8 @@ def _split_outside_brackets(s: str) -> list[str]:
 def shopping_items(text: str, kind: str) -> ShoppingItems:
     """The things to buy in a plan's `## Shopping` section, or in every aisle
     section of a weekly list. Items under "Check you have" come back as
-    'Check: <item>', one per comma-separated entry."""
+    'Check: <item>', one per comma-separated entry; an entry that is only an
+    amount stays with the item before it."""
     items: list[str] = []
     have: list[str] = []
     in_scope = False
@@ -193,7 +202,13 @@ def shopping_items(text: str, kind: str) -> ShoppingItems:
             have.append(_clean_item(item.replace("(have)", "")))
             continue
         if g.startswith(CHECK):
-            items += [f"Check: {_clean_item(p)}" for p in _split_outside_brackets(item)]
+            parts: list[str] = []
+            for p in _split_outside_brackets(item):
+                if parts and _AMOUNT.match(p.strip()):
+                    parts[-1] = f"{parts[-1]}, {p.strip()}"
+                else:
+                    parts.append(p)
+            items += [f"Check: {_clean_item(p)}" for p in parts]
             continue
         title = _clean_item(item)
         if title and not title.casefold().startswith("nothing"):

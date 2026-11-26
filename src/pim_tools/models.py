@@ -73,7 +73,8 @@ class AddEventRequest(BaseModel):
     calendar: str | None = Field(
         default=None,
         description="Which calendar to put it on, by name from list_calendars. Each calendar "
-        "is a kind of event with its own colour on the phone. Omit for the default calendar.",
+        "is a kind of event with its own colour on the phone: use the one whose kind the "
+        "event is. Omit for the default calendar when none fits.",
     )
 
 
