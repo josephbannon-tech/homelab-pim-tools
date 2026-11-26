@@ -39,6 +39,7 @@ WRITES = frozenset(
         "add_event",
         "change_event",
         "cancel_event",
+        "move_event",
         "append_note",
         "add_recipe_note",
         "change_recipe_text",
@@ -114,14 +115,53 @@ class RecordingStore(MemoryStore):
         return super().list_events(start, end, calendar)
 
     def add_event(
-        self, title: str, start: datetime, end: datetime | None, notes: str | None
+        self,
+        title: str,
+        start: datetime,
+        end: datetime | None,
+        notes: str | None,
+        calendar: str | None = None,
     ) -> tuple[Event, bool]:
         call = self._record(
-            "add_event", {"title": title, "start": start, "end": end, "notes": notes}
+            "add_event",
+            {
+                "title": title,
+                "start": start,
+                "end": end,
+                "notes": notes,
+                "calendar": calendar or self.calendars[0],
+            },
         )
-        event, created = super().add_event(title, start, end, notes)
+        try:
+            event, created = super().add_event(title, start, end, notes, calendar)
+        except NotFound:
+            call.ok = False
+            raise
         call.changed = created
         return event, created
+
+    def calendars_info(self):
+        self._record("list_calendars", {})
+        return super().calendars_info()
+
+    def move_event(self, calendar, uid, start, to_calendar, whole_series):
+        call = self._record(
+            "move_event",
+            {
+                "calendar": calendar,
+                "uid": uid,
+                "start": start,
+                "to_calendar": to_calendar,
+                "whole_series": whole_series,
+            },
+        )
+        try:
+            out = super().move_event(calendar, uid, start, to_calendar, whole_series)
+        except Exception:
+            call.ok = False
+            raise
+        call.changed = True
+        return out
 
     def change_event(self, calendar, uid, start, new_start, new_end, new_title, notes):
         call = self._record(
@@ -261,6 +301,9 @@ def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
                     completed=bool(item.get("completed")),
                 )
             )
+    if seed.get("calendars"):  # {name: colour}, in order; the first is the default
+        store.calendars = tuple(seed["calendars"])
+        store.colours = dict(seed["calendars"])
     series: dict[str, str] = {}
     for ev in seed.get("events") or []:
         uid = str(uuid.uuid4())

@@ -26,6 +26,7 @@ class _FakeCalendar:
 def _store_with(cal: _FakeCalendar) -> CalDAVStore:
     store = CalDAVStore.__new__(CalDAVStore)
     store._event_calendar_name = "personal"
+    store._calendars = ("personal",)
     store._calendar = lambda name: cal  # type: ignore[method-assign]
     store.list_events = lambda start, end: []  # type: ignore[method-assign]
     return store

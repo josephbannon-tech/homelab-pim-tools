@@ -23,6 +23,7 @@ from .models import (
     AddTaskResult,
     AppendNoteRequest,
     AppendNoteResult,
+    CalendarList,
     CancelEventResult,
     ChangeEventRequest,
     ChangeEventResult,
@@ -32,6 +33,8 @@ from .models import (
     EventList,
     EventRef,
     MealPlanRequest,
+    MoveEventRequest,
+    MoveEventResult,
     Note,
     NoteList,
     Recipe,
@@ -121,6 +124,11 @@ def _default_store() -> Store:
         extra_calendars=tuple(
             c.strip()
             for c in os.environ.get("RADICALE_EXTRA_CALENDARS", "").split(",")
+            if c.strip()
+        ),
+        background=tuple(
+            c.strip()
+            for c in os.environ.get("RADICALE_ROUTINE_CALENDARS", "routine").split(",")
             if c.strip()
         ),
     )
@@ -231,11 +239,12 @@ def complete_task(req: CompleteTaskRequest, store: Store = Depends(get_store)) -
     operation_id="list_events",
     summary="List calendar events in a time range",
     description=(
-        "Returns appointments on the personal calendar between two ISO 8601 timestamps. "
-        "Defaults to the next 7 days. Recurring daily routine blocks (work, meals, "
+        "Returns appointments between two ISO 8601 timestamps, from every appointment "
+        "calendar. Defaults to the next 7 days. Recurring daily routine blocks (work, meals, "
         "exercise) are on a separate calendar: pass calendar='routine' to read those, "
-        "or calendar='all' for both, which is what to use when checking if a time is free. "
-        "Each event carries the uid, start and calendar that change_event and cancel_event need."
+        "or calendar='all' for everything, which is what to use when checking if a time is "
+        "free. A calendar name reads just that calendar. Each event carries the uid, start "
+        "and calendar that change_event, cancel_event and move_event need."
     ),
     response_model=EventList,
     response_model_by_alias=True,
@@ -244,7 +253,9 @@ def list_events(
     start: datetime | None = Query(None, alias="from"),
     end: datetime | None = Query(None, alias="to"),
     calendar: str | None = Query(
-        None, description="Omit for appointments only; 'routine' or 'all' to widen."
+        None,
+        description="Omit for every appointment calendar; 'routine', 'all' or one "
+        "calendar's name otherwise.",
     ),
     store: Store = Depends(get_store),
 ) -> EventList:
@@ -255,8 +266,8 @@ def list_events(
     try:
         events = store.list_events(start, end, calendar)
     except NotFound as e:
-        raise HTTPException(404, f"no calendar named {e}; use 'routine' or 'all'") from e
-    return EventList(calendar=calendar or "personal", **{"from": start}, to=end, events=events)
+        raise _no_such_calendar(e, store) from e
+    return EventList(calendar=calendar or "appointments", **{"from": start}, to=end, events=events)
 
 
 @app.post(
@@ -265,16 +276,43 @@ def list_events(
     operation_id="add_event",
     summary="Add a calendar event",
     description=(
-        "Creates an event on the personal calendar. Give start as ISO 8601 with a timezone; "
-        "end defaults to one hour later. Idempotent on (title, start)."
+        "Creates an event. Give start as ISO 8601 with a timezone; end defaults to one hour "
+        "later. Name a calendar to file it as a kind of event (each has its own colour); "
+        "omit it for the default. Idempotent on (title, start)."
     ),
     response_model=AddEventResult,
 )
 def add_event(req: AddEventRequest, store: Store = Depends(get_store)) -> AddEventResult:
     if req.end and req.end <= req.start:
         raise HTTPException(422, "end must be after start")
-    event, created = store.add_event(req.title, req.start, req.end, req.notes)
+    try:
+        event, created = store.add_event(req.title, req.start, req.end, req.notes, req.calendar)
+    except NotFound as e:
+        raise _no_such_calendar(e, store) from e
+    except Unsupported as e:
+        raise HTTPException(422, str(e)) from e
     return AddEventResult(event=event, created=created)
+
+
+def _no_such_calendar(e: NotFound, store: Store) -> HTTPException:
+    names = ", ".join(f"'{c.name}'" for c in store.calendars_info())
+    return HTTPException(404, f"no calendar named {e}; calendars: {names}, or 'all'")
+
+
+@app.get(
+    "/calendars",
+    tags=["calendar"],
+    operation_id="list_calendars",
+    summary="List the calendars and their colours",
+    description=(
+        "Returns each calendar with the colour the phone shows it in. An event's colour is "
+        "its calendar's: to colour an event, put it on (add_event) or move it to "
+        "(move_event) the calendar of that colour."
+    ),
+    response_model=CalendarList,
+)
+def list_calendars(store: Store = Depends(get_store)) -> CalendarList:
+    return CalendarList(calendars=store.calendars_info())
 
 
 _SERIES = (
@@ -350,6 +388,33 @@ def cancel_event(req: EventRef, store: Store = Depends(get_store)) -> CancelEven
     except Unsupported as e:
         raise HTTPException(422, str(e)) from e
     return CancelEventResult(cancelled=gone, scope=_scope(gone))
+
+
+@app.post(
+    "/events/move",
+    tags=["calendar"],
+    operation_id="move_event",
+    summary="Move an event to another calendar (changes its colour)",
+    description=(
+        "Moves an event to another calendar, which changes the colour it shows in. Identify "
+        "it by the uid, start and calendar that list_events returned. A single event moves "
+        "whole. For a repeating event, whole_series=true moves every day and false (the "
+        "default) only that day. A whole routine series cannot move; one day of it can."
+    ),
+    response_model=MoveEventResult,
+)
+def move_event(req: MoveEventRequest, store: Store = Depends(get_store)) -> MoveEventResult:
+    try:
+        event, scope = store.move_event(
+            req.calendar, req.uid, req.start, req.to_calendar, req.whole_series
+        )
+    except NotFound as e:
+        if str(e) == req.to_calendar:
+            raise _no_such_calendar(e, store) from e
+        raise _no_such_event(req, e) from e
+    except Unsupported as e:
+        raise HTTPException(422, str(e)) from e
+    return MoveEventResult(event=event, from_calendar=req.calendar, scope=scope)
 
 
 def _note(n: NoteFile) -> Note:

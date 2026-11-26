@@ -184,6 +184,7 @@ def score_case(
             _norm(e.title) == _norm(want["title"])
             and arg_matches(want["start"], e.start)
             and ("end" not in want or arg_matches(want["end"], e.end))
+            and ("calendar" not in want or e.calendar == want["calendar"])
             for e in store.events
         )
         if found != present:

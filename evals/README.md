@@ -1,6 +1,6 @@
 # Eval set
 
-Thirty-two scripted chat turns that decide whether a model is safe to put in front of a real calendar and task lists. It gates one change: swapping the model behind the chat.
+Sixty-one scripted chat turns that decide whether a model is safe to put in front of a real calendar and task lists. It gates one change: swapping the model behind the chat.
 
 ```bash
 pip install -e ".[dev]"
