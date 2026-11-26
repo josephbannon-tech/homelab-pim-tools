@@ -135,3 +135,88 @@ class AppendNoteRequest(BaseModel):
 class AppendNoteResult(BaseModel):
     note: Note = Field(description="The note as it now stands (its last part, if long).")
     created: bool = Field(description="True when this call made a new note.")
+
+
+class Recipe(BaseModel):
+    name: str = Field(description="The recipe or plan's name, e.g. 'Lamb Keema with Rice'.")
+    kind: str = Field(description="recipe, plan (a one-off meal plan) or weekly list.")
+    file: str = Field(description="File name without .md.")
+    protein: str | None = None
+    cuisine: str | None = None
+    effort: str | None = Field(default=None, description="quick, standard or weekend.")
+    kcal_per_serving: str | None = None
+    serves: str | None = None
+    retired: bool = Field(default=False, description="True for a recipe taken out of planning.")
+    modified: datetime | None = None
+    text: str | None = Field(default=None, description="The full text (markdown).")
+    truncated: bool = False
+
+
+class RecipeList(BaseModel):
+    recipes: list[Recipe]
+
+
+class CookingGuide(BaseModel):
+    text: str = Field(description="The household's eating profile: likes, dislikes, habits.")
+
+
+class RecipeNoteRequest(BaseModel):
+    name: str = Field(description="The recipe, by name from list_recipes.")
+    text: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="What to add to the recipe's Notes, as a short instruction for next time, "
+        "e.g. 'Double the green chilli.'",
+    )
+
+
+class RecipeChangeRequest(BaseModel):
+    name: str = Field(description="The recipe, by name from list_recipes.")
+    old_text: str = Field(
+        min_length=1,
+        description="A passage copied word for word from read_recipe, long enough to occur "
+        "only once.",
+    )
+    new_text: str = Field(description="What replaces it, in the same style.")
+
+
+class RecipeTagRequest(BaseModel):
+    name: str = Field(description="The recipe, by name from list_recipes.")
+    tag: str = Field(description="effort, kcal_per_serving, serves, scales_well or freezes_well.")
+    value: str = Field(
+        description="effort: quick, standard or weekend. kcal_per_serving and serves: a "
+        "whole number. scales_well and freezes_well: yes or no."
+    )
+
+
+class RecipeEditResult(BaseModel):
+    recipe: Recipe = Field(description="The recipe as it now stands.")
+    index_updated: bool | None = Field(
+        default=None, description="For a tag change: whether the recipe index was updated too."
+    )
+
+
+class MealPlanRequest(BaseModel):
+    title: str = Field(min_length=3, max_length=120, description="e.g. 'Steak Night for Two'.")
+    text: str = Field(
+        min_length=20,
+        max_length=20000,
+        description="The plan in markdown. Must include a '## Shopping' section: one '- item' "
+        "line per thing to buy with its quantity, '(have)' after anything already in, and a "
+        "'Check you have' label above store-cupboard items.",
+    )
+
+
+class ShoppingRequest(BaseModel):
+    name: str = Field(
+        description="A meal plan's name, or a weekly list by the date of its Monday "
+        "(YYYY-MM-DD), from list_recipes."
+    )
+
+
+class ShoppingResult(BaseModel):
+    task_list: str = Field(description="The task list the items went to.")
+    source: str = Field(description="The plan or weekly list they came from.")
+    added: list[str] = Field(description="Items put on the list.")
+    already_there: list[str] = Field(description="Items that were on the list already.")
+    have: list[str] = Field(description="Items the plan marks as already in, not added.")

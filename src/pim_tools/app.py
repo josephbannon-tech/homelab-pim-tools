@@ -27,15 +27,26 @@ from .models import (
     ChangeEventRequest,
     ChangeEventResult,
     CompleteTaskRequest,
+    CookingGuide,
     Event,
     EventList,
     EventRef,
+    MealPlanRequest,
     Note,
     NoteList,
+    Recipe,
+    RecipeChangeRequest,
+    RecipeEditResult,
+    RecipeList,
+    RecipeNoteRequest,
+    RecipeTagRequest,
+    ShoppingRequest,
+    ShoppingResult,
     Task,
     TaskList,
 )
 from .notes import BadName, NoNotes, NoSuchNote, NoteFile, Notes
+from .recipes import Doc, Exists, NoRecipes, NoSuchRecipe, Recipes, Refused
 from .store import NotFound, Store, Unsupported
 from .telemetry import configure as configure_telemetry
 
@@ -48,6 +59,15 @@ SWEEP_LISTS = tuple(
     s.strip() for s in os.environ.get("PIM_SWEEP_LISTS", "").split(",") if s.strip()
 )
 SWEEP_SECONDS = float(os.environ.get("PIM_SWEEP_SECONDS", "300"))
+
+# Which groups of tools this instance serves. One image runs as two services:
+# the cluster one serves the calendar, task lists and notes; one beside the
+# recipe files serves recipes. Each route carries its group as its tag.
+DEFAULT_TOOLSETS = "calendar,tasks,notes"
+TOOLSETS = frozenset(
+    s.strip() for s in os.environ.get("PIM_TOOLSETS", DEFAULT_TOOLSETS).split(",") if s.strip()
+)
+RECIPES_SHOPPING_LIST = os.environ.get("RECIPES_SHOPPING_LIST", "shopping")
 
 
 def sweep_once(store: Store, lists: tuple[str, ...] = SWEEP_LISTS) -> int:
@@ -144,6 +164,7 @@ def health() -> dict[str, str]:
 
 @app.get(
     "/tasks/{list_name}",
+    tags=["tasks"],
     operation_id="list_tasks",
     summary="List the open tasks on a task list",
     description=(
@@ -169,6 +190,7 @@ def list_tasks(
 
 @app.post(
     "/tasks",
+    tags=["tasks"],
     operation_id="add_task",
     summary="Add a task to a task list",
     description=(
@@ -187,6 +209,7 @@ def add_task(req: AddTaskRequest, store: Store = Depends(get_store)) -> AddTaskR
 
 @app.post(
     "/tasks/complete",
+    tags=["tasks"],
     operation_id="complete_task",
     summary="Mark a task as done",
     description=(
@@ -204,6 +227,7 @@ def complete_task(req: CompleteTaskRequest, store: Store = Depends(get_store)) -
 
 @app.get(
     "/events",
+    tags=["calendar"],
     operation_id="list_events",
     summary="List calendar events in a time range",
     description=(
@@ -237,6 +261,7 @@ def list_events(
 
 @app.post(
     "/events",
+    tags=["calendar"],
     operation_id="add_event",
     summary="Add a calendar event",
     description=(
@@ -275,6 +300,7 @@ def _no_such_event(ref: EventRef, e: NotFound) -> HTTPException:
 
 @app.post(
     "/events/change",
+    tags=["calendar"],
     operation_id="change_event",
     summary="Change the time, title or notes of one event",
     description=(
@@ -306,6 +332,7 @@ def change_event(req: ChangeEventRequest, store: Store = Depends(get_store)) -> 
 
 @app.post(
     "/events/cancel",
+    tags=["calendar"],
     operation_id="cancel_event",
     summary="Cancel one event",
     description=(
@@ -347,6 +374,7 @@ async def _notes_off(_, __):
 
 @app.get(
     "/notes",
+    tags=["notes"],
     operation_id="list_notes",
     summary="List the user's notes, or find the ones that mention something",
     description=(
@@ -365,6 +393,7 @@ def list_notes(
 
 @app.get(
     "/notes/read",
+    tags=["notes"],
     operation_id="read_note",
     summary="Read one note",
     description="Returns a note's text, by name. An unknown name returns the names that exist.",
@@ -382,6 +411,7 @@ def read_note(
 
 @app.post(
     "/notes/append",
+    tags=["notes"],
     operation_id="append_note",
     summary="Add text to the end of a note",
     description=(
@@ -401,9 +431,268 @@ def append_note(req: AppendNoteRequest, notes: Notes = Depends(get_notes)) -> Ap
     return AppendNoteResult(note=_note(note), created=created)
 
 
+@lru_cache(maxsize=1)
+def _default_recipes() -> Recipes | None:
+    root = os.environ.get("RECIPES_DIR", "").strip()
+    if not root:
+        return None
+    guides = tuple(
+        g.strip() for g in os.environ.get("RECIPES_GUIDES", "profile.md").split(",") if g.strip()
+    )
+    return Recipes(
+        root,
+        plans=os.environ.get("RECIPES_PLANS_DIR", "tmp"),
+        lists=os.environ.get("RECIPES_LISTS_DIR", "shopping-lists"),
+        guides=guides,
+    )
+
+
+def get_recipes() -> Recipes:
+    recipes = _default_recipes()
+    if recipes is None:
+        raise NoRecipes()
+    return recipes
+
+
+def _recipe(d: Doc) -> Recipe:
+    t = d.tags
+    return Recipe(
+        name=d.name,
+        kind=d.kind,
+        file=d.path.stem,
+        protein=t.get("protein"),
+        cuisine=t.get("cuisine"),
+        effort=t.get("effort"),
+        kcal_per_serving=t.get("kcal_per_serving"),
+        serves=t.get("serves"),
+        retired=d.retired,
+        modified=d.modified,
+        text=d.text,
+        truncated=d.truncated,
+    )
+
+
+def _no_such_recipe(e: NoSuchRecipe) -> HTTPException:
+    close = ", ".join(f"'{k}'" for k in e.close) or "none close"
+    return HTTPException(
+        404,
+        f"nothing named '{e.name}'. Closest: {close}. Call list_recipes to search. "
+        "Do not change a different recipe without asking which one was meant.",
+    )
+
+
+@app.exception_handler(NoRecipes)
+async def _recipes_off(_, __):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"detail": "recipes are not set up on this server"}, status_code=503)
+
+
+@app.get(
+    "/recipes",
+    tags=["recipes"],
+    operation_id="list_recipes",
+    summary="List or search the user's recipes, meal plans and weekly shopping lists",
+    description=(
+        "Returns names and tags (protein, cuisine, effort, kcal) of the user's recipes, plus "
+        "their one-off meal plans and weekly shopping lists (named by the Monday's date). "
+        "Give query to keep only those whose name, tags or text contain every word."
+    ),
+    response_model=RecipeList,
+)
+def list_recipes(
+    query: str | None = Query(
+        None, description="Words to look for, e.g. 'cod' or 'quick chicken'."
+    ),
+    recipes: Recipes = Depends(get_recipes),
+) -> RecipeList:
+    return RecipeList(recipes=[_recipe(d) for d in recipes.list(query)])
+
+
+@app.get(
+    "/recipes/read",
+    tags=["recipes"],
+    operation_id="read_recipe",
+    summary="Read one recipe, meal plan or weekly shopping list",
+    description=(
+        "Returns the full text by name: ingredients, method and notes for a recipe. "
+        "An unknown name returns the closest names."
+    ),
+    response_model=Recipe,
+)
+def read_recipe(
+    name: str = Query(description="The name from list_recipes."),
+    recipes: Recipes = Depends(get_recipes),
+) -> Recipe:
+    try:
+        return _recipe(recipes.read(name))
+    except NoSuchRecipe as e:
+        raise _no_such_recipe(e) from e
+
+
+@app.get(
+    "/recipes/guide",
+    tags=["recipes"],
+    operation_id="read_cooking_guide",
+    summary="Read the household's eating profile",
+    description=(
+        "Returns what the household likes, dislikes and won't eat, and how they cook. "
+        "Read it before planning a meal."
+    ),
+    response_model=CookingGuide,
+)
+def read_cooking_guide(recipes: Recipes = Depends(get_recipes)) -> CookingGuide:
+    return CookingGuide(text=recipes.guide())
+
+
+def _refused(e: Refused) -> HTTPException:
+    return HTTPException(422, str(e))
+
+
+@app.post(
+    "/recipes/note",
+    tags=["recipes"],
+    operation_id="add_recipe_note",
+    summary="Add a note to a recipe, e.g. feedback after cooking it",
+    description=(
+        "Adds a line to the end of the recipe's Notes section. Use it for what to do "
+        "differently next time. To change a quantity, time or step in the recipe itself, "
+        "use change_recipe_text instead."
+    ),
+    response_model=RecipeEditResult,
+)
+def add_recipe_note(
+    req: RecipeNoteRequest, recipes: Recipes = Depends(get_recipes)
+) -> RecipeEditResult:
+    try:
+        return RecipeEditResult(recipe=_recipe(recipes.add_note(req.name, req.text)))
+    except NoSuchRecipe as e:
+        raise _no_such_recipe(e) from e
+    except Refused as e:
+        raise _refused(e) from e
+
+
+@app.post(
+    "/recipes/change",
+    tags=["recipes"],
+    operation_id="change_recipe_text",
+    summary="Change one passage of a recipe: a quantity, a time or a step",
+    description=(
+        "Replaces one exact passage of the recipe. Call read_recipe first and copy old_text "
+        "word for word, long enough to occur once. Keep the recipe's style. Recipes cannot be "
+        "deleted, renamed or rewritten whole here; tell the user to do that at their desk."
+    ),
+    response_model=RecipeEditResult,
+)
+def change_recipe_text(
+    req: RecipeChangeRequest, recipes: Recipes = Depends(get_recipes)
+) -> RecipeEditResult:
+    try:
+        return RecipeEditResult(
+            recipe=_recipe(recipes.change_text(req.name, req.old_text, req.new_text))
+        )
+    except NoSuchRecipe as e:
+        raise _no_such_recipe(e) from e
+    except Refused as e:
+        raise _refused(e) from e
+
+
+@app.post(
+    "/recipes/tag",
+    tags=["recipes"],
+    operation_id="set_recipe_tag",
+    summary="Set one tag on a recipe: effort, calories, servings, or whether it scales or freezes",
+    description=(
+        "Sets effort (quick under 30 min, standard 45 to 60, weekend longer), "
+        "kcal_per_serving, serves, scales_well or freezes_well. The recipe index follows."
+    ),
+    response_model=RecipeEditResult,
+)
+def set_recipe_tag(
+    req: RecipeTagRequest, recipes: Recipes = Depends(get_recipes)
+) -> RecipeEditResult:
+    try:
+        doc, indexed = recipes.set_tag(req.name, req.tag, req.value)
+    except NoSuchRecipe as e:
+        raise _no_such_recipe(e) from e
+    except Refused as e:
+        raise _refused(e) from e
+    return RecipeEditResult(recipe=_recipe(doc), index_updated=indexed)
+
+
+@app.post(
+    "/plans",
+    tags=["recipes"],
+    operation_id="save_meal_plan",
+    summary="Save a new one-off meal plan",
+    description=(
+        "Saves a plan for one specific meal (a dinner for guests, a special occasion) as a new "
+        "file. Read read_cooking_guide first, and reuse the user's recipes where they fit. "
+        "Never overwrites: a title already used is refused. To put its shopping on the list, "
+        "call add_to_shopping with the plan's name."
+    ),
+    response_model=Recipe,
+)
+def save_meal_plan(req: MealPlanRequest, recipes: Recipes = Depends(get_recipes)) -> Recipe:
+    try:
+        return _recipe(recipes.save_plan(req.title, req.text))
+    except Refused as e:
+        raise _refused(e) from e
+    except Exists as e:
+        raise HTTPException(
+            409, f"a plan called '{e}' already exists; choose another title or read that one"
+        ) from e
+
+
+@app.post(
+    "/shopping/from",
+    tags=["recipes"],
+    operation_id="add_to_shopping",
+    summary="Put a meal plan's or a weekly list's shopping on the shopping list",
+    description=(
+        "Reads the shopping section of a meal plan, or every aisle of a weekly shopping list, "
+        "and adds each item to the shopping task list. Store-cupboard items go on as "
+        "'Check: <item>'. Items already on the list and items marked (have) are not added. "
+        "Report the counts it returns."
+    ),
+    response_model=ShoppingResult,
+)
+def add_to_shopping(
+    req: ShoppingRequest,
+    recipes: Recipes = Depends(get_recipes),
+    store: Store = Depends(get_store),
+) -> ShoppingResult:
+    try:
+        doc, found = recipes.shopping(req.name)
+    except NoSuchRecipe as e:
+        raise _no_such_recipe(e) from e
+    added, already = [], []
+    for title in found.items:
+        try:
+            _, created = store.add_task(RECIPES_SHOPPING_LIST, title, None)
+        except NotFound as e:
+            raise _no_such_list(e, store) from e
+        (added if created else already).append(title)
+    return ShoppingResult(
+        task_list=RECIPES_SHOPPING_LIST,
+        source=doc.name,
+        added=added,
+        already_there=already,
+        have=found.have,
+    )
+
+
+def selected_routes(routes, toolsets) -> list:
+    """Routes without a tag (health, the schema) always stay; a tagged route
+    stays only when its group is switched on."""
+    return [r for r in routes if not getattr(r, "tags", None) or set(r.tags) & set(toolsets)]
+
+
+app.router.routes[:] = selected_routes(app.router.routes, TOOLSETS)
+
 _ = Event  # re-exported for type checkers
 
-# Second door: the same ten operations as MCP tools (Streamable HTTP at /mcp),
+# Second door: the same operations as MCP tools (Streamable HTTP at /mcp),
 # generated from the routes above so there is one definition of each tool.
 # Mounted after the routes, which fastapi-mcp reads at construction time.
 FastApiMCP(app, name="pim-tools").mount_http()

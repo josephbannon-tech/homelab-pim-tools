@@ -259,6 +259,7 @@ class OracleBrain:
         self.rogue = rogue
 
     def ask(self, messages: list[dict[str, str]], case: dict[str, Any]) -> str:
+        planned = ""
         for expect in case["expect"]:
             if expect.get("optional"):
                 continue
@@ -303,6 +304,22 @@ class OracleBrain:
                 ev = next(e for e in found if e["title"].casefold() == expect["event"].casefold())
                 body = {**args, "uid": ev["uid"], "start": ev["start"], "calendar": ev["calendar"]}
                 httpx.post(f"{self.url}/events/{tool.split('_')[0]}", json=body).raise_for_status()
+            elif tool == "list_recipes":
+                httpx.get(f"{self.url}/recipes", params={k: v for k, v in args.items() if v})
+            elif tool == "read_recipe":
+                httpx.get(f"{self.url}/recipes/read", params=args).raise_for_status()
+            elif tool == "read_cooking_guide":
+                httpx.get(f"{self.url}/recipes/guide").raise_for_status()
+            elif tool in ("add_recipe_note", "change_recipe_text", "set_recipe_tag"):
+                path = {"add_recipe_note": "note", "change_recipe_text": "change"}.get(tool, "tag")
+                httpx.post(f"{self.url}/recipes/{path}", json=args).raise_for_status()
+            elif tool == "save_meal_plan":
+                plan = {"title": "Oracle Plan", "text": "## Shopping\n\n- 1 leg of lamb\n"}
+                httpx.post(f"{self.url}/plans", json=plan).raise_for_status()
+                planned = plan["title"]
+            elif tool == "add_to_shopping":
+                name = args.get("name") or planned
+                httpx.post(f"{self.url}/shopping/from", json={"name": name}).raise_for_status()
         if self.rogue:
             httpx.post(f"{self.url}/tasks", json={"list": "todo", "title": "Unrequested"})
         checks = case.get("reply") or {}

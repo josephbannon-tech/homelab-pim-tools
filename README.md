@@ -18,10 +18,20 @@ It exists because retrieval over personal data is the wrong tool for the job. An
 | `list_notes` | GET | `/notes?query=` | n/a |
 | `read_note` | GET | `/notes/read?name=` | n/a |
 | `append_note` | POST | `/notes/append` | no: each call adds its text |
+| `list_recipes` | GET | `/recipes?query=` | n/a |
+| `read_recipe` | GET | `/recipes/read?name=` | n/a |
+| `read_cooking_guide` | GET | `/recipes/guide` | n/a |
+| `add_recipe_note` | POST | `/recipes/note` | no: each call adds a line |
+| `change_recipe_text` | POST | `/recipes/change` | yes in effect: the old passage is gone after the first call |
+| `set_recipe_tag` | POST | `/recipes/tag` | yes |
+| `save_meal_plan` | POST | `/plans` | refused the second time (409) |
+| `add_to_shopping` | POST | `/shopping/from` | yes: items already on the list are skipped |
+
+Tools come in groups (`calendar`, `tasks`, `notes`, `recipes`) and `PIM_TOOLSETS` picks which ones an instance serves, so one image runs as two services: the cluster one over CalDAV and the notes vault, and one on the host that holds the recipe files.
 
 The OpenAPI document at `/openapi.json` is the integration surface. Open WebUI registers it as an external tool server and turns each `operationId` into a tool, so the operation ids and descriptions are written for the model, not for a human reader.
 
-The same ten operations are served as MCP tools at `/mcp` (Streamable HTTP) for clients that speak MCP rather than OpenAPI, which in the homelab is Claude Code running headless behind the chat. The tools are generated from the routes above, so there is one definition of each operation and two doors onto it.
+The same operations are served as MCP tools at `/mcp` (Streamable HTTP) for clients that speak MCP rather than OpenAPI, which in the homelab is Claude Code running headless behind the chat. The tools are generated from the routes above, so there is one definition of each operation and two doors onto it.
 
 With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` on every request except `/health` and `/openapi.json`. Unset, the server is open, which is the posture for in-cluster callers only.
 
@@ -37,6 +47,8 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 - **The server sweeps, because the phone does not ask.** A job ticked in a phone app is written straight to the CalDAV server and never passes through this service. A background pass every five minutes finds ticked jobs, reschedules them and follows their links. Display order (`X-APPLE-SORT-ORDER`) is rewritten only when the relative order of the visible jobs is wrong, not on every pass, so an idle list costs no writes and no phone resyncs. Writes carry the ETag; if the phone edited the task in between, the phone's version stands and the next pass settles it.
 - **Notes are a folder of markdown files, and the assistant can only add to them.** The notes live in a folder that Syncthing keeps on the phone, where any markdown editor opens them; this service mounts the same folder. `append_note` adds text at the end and nothing else: no overwrite, no rename, no delete, so the worst a wrong call can do is a stray line the owner removes. Appending to a name that matches no note is refused with the names that exist, unless the call says to create one, because a misheard name should not quietly become a new file. Writes go to a temporary file that is swapped in, so the sync tool never ships half a note.
 - **A private folder the tools cannot see.** Folders named in `NOTES_EXCLUDE` are not listed, searched, read or written, and the refusal does not admit they exist. Everything the assistant reads leaves the house in a prompt, so the line between what it may see and what it may not is a folder the owner controls from the phone, and it is enforced here, not in the prompt. Two eval cases hold it: a question about a private note must not surface its contents.
+- **Recipes get edits a file survives, not a file editor.** The recipe folder belongs to a meal-planning project that a desktop editor also works on, so the tools allow four narrow writes: a line added to a recipe's Notes, one exact passage replaced (it must occur once, and the result must still carry its tags and its Ingredients and Method sections, or nothing is saved), one tag set to an allowed value with the index table kept in step, and a new one-off meal plan that never overwrites. Nothing is deleted or renamed. A general file-editing tool would have been quicker to wire to one model; these work the same for any model behind the front end, and the eval set measures them.
+- **Shopping is parsed, not generated.** `add_to_shopping` reads a plan's `## Shopping` section, or every aisle of a weekly list, and adds each item through the same idempotent `add_task`. Store-cupboard items go on as `Check: ...`, items marked `(have)` are skipped, and long asides in brackets are trimmed so a line fits a phone. The model only names the plan; a weak model cannot drop or invent items, and running it twice adds nothing.
 - **Store behind a `Protocol`, tested twice.** The HTTP layer is tested against an in-memory store (fast, no server). The CalDAV store has a separate round-trip test that runs only when `RADICALE_URL` is set, so CI stays hermetic and the live behaviour is still checked before a release.
 - **MCP generated from the OpenAPI routes, not written twice.** fastapi-mcp turns each route into a tool named after its `operationId`, with the descriptions and schemas the OpenAPI door already exposes, and invokes the route in-process with the caller's bearer forwarded. A hand-written MCP server would be a second copy of the tool contract, and copies drift.
 - **A shared-secret bearer token, not identity.** v1 had no auth and stayed on a ClusterIP for that reason. The token (v0.3) lets the service sit on a NodePort for an MCP client on another host without letting anything else on the LAN write to the calendar. It says a caller is trusted, not who they are, which is all a single-user tool needs. The gate is a pure ASGI middleware because Starlette's `BaseHTTPMiddleware` buffers response bodies and the MCP transport streams.
@@ -50,7 +62,7 @@ With `PIM_TOOLS_TOKEN` set, both doors require `Authorization: Bearer <token>` o
 
 ## Eval set
 
-[`evals/`](evals/) holds 46 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
+[`evals/`](evals/) holds 55 scripted chat turns that gate any change to who or what sits in front of these tools. A front end that runs its own tool loop returns only text, so the harness scores at the tool server: the real app on a loopback port over a recording store, seeded fresh for each case. A run passes at 90% of cases with zero writes that a case did not ask for. Method, coverage and results are in [evals/README.md](evals/README.md).
 
 ## Tracing
 
@@ -66,6 +78,8 @@ export PIM_SWEEP_LISTS=chores       # optional: task lists holding repeating job
 export PIM_SWEEP_SECONDS=300        # this many seconds for jobs ticked on a phone
 export NOTES_DIR=/vault             # optional: a folder of markdown notes (the notes tools answer 503 without it)
 export NOTES_EXCLUDE=Private        # optional: top-level folders the notes tools must never see
+export RECIPES_DIR=/srv/nutrition   # optional: recipes/, tmp/ (plans), shopping-lists/, profile.md
+export PIM_TOOLSETS=calendar,tasks,notes   # the default; add or pick 'recipes'
 export PIM_TOOLS_TOKEN=...          # optional; omit for the open, in-cluster-only posture
 uvicorn pim_tools.app:app --host 0.0.0.0 --port 8000
 ```
@@ -97,4 +111,3 @@ Part of a single-node homelab run as production-shape infrastructure: GitOps wit
 
 - Child spans for the CalDAV round trips (the `caldav` client sits on niquests, which is not auto-instrumented).
 - Contacts (`list_contacts`, `add_contact`) over CardDAV on the same principal.
-- Notes tools over a Syncthing-replicated markdown vault (`read_note`, `append_note`), once the vault exists.

@@ -26,13 +26,25 @@ from typing import Any
 import httpx
 import uvicorn
 
-from pim_tools.app import app, get_notes, get_store
+from pim_tools.app import app, get_notes, get_recipes, get_store
 from pim_tools.models import Event, Task
 from pim_tools.notes import Notes
+from pim_tools.recipes import Recipes
 from pim_tools.store import MemoryStore, NotFound
 
 WRITES = frozenset(
-    {"add_task", "complete_task", "add_event", "change_event", "cancel_event", "append_note"}
+    {
+        "add_task",
+        "complete_task",
+        "add_event",
+        "change_event",
+        "cancel_event",
+        "append_note",
+        "add_recipe_note",
+        "change_recipe_text",
+        "set_recipe_tag",
+        "save_meal_plan",
+    }
 )
 
 
@@ -175,6 +187,57 @@ class RecordingNotes(Notes):
         return self._run("append_note", args, lambda: Notes.append(self, name, text, create), True)
 
 
+class RecordingRecipes(Recipes):
+    """The recipes folder, logging into the same list as the store. A call to
+    add_to_shopping shows up as the add_task calls it makes."""
+
+    def __init__(self, root, calls: list[Call]):
+        super().__init__(root)
+        self.calls = calls
+
+    def _run(self, tool: str, args: dict[str, Any], fn, write: bool = False):
+        call = Call(tool, args)
+        self.calls.append(call)
+        try:
+            out = fn()
+        except Exception:
+            call.ok = False
+            raise
+        call.changed = write
+        return out
+
+    def list(self, query=None):
+        return self._run("list_recipes", {"query": query}, lambda: Recipes.list(self, query))
+
+    def read(self, name):
+        return self._run("read_recipe", {"name": name}, lambda: Recipes.read(self, name))
+
+    def guide(self):
+        return self._run("read_cooking_guide", {}, lambda: Recipes.guide(self))
+
+    def add_note(self, name, text):
+        args = {"name": name, "text": text}
+        return self._run("add_recipe_note", args, lambda: Recipes.add_note(self, name, text), True)
+
+    def change_text(self, name, old, new):
+        args = {"name": name, "old_text": old, "new_text": new}
+        fn = lambda: Recipes.change_text(self, name, old, new)  # noqa: E731
+        return self._run("change_recipe_text", args, fn, True)
+
+    def set_tag(self, name, tag, value):
+        args = {"name": name, "tag": tag, "value": value}
+        return self._run(
+            "set_recipe_tag", args, lambda: Recipes.set_tag(self, name, tag, value), True
+        )
+
+    def save_plan(self, title, text):
+        args = {"title": title, "text": text}
+        return self._run("save_meal_plan", args, lambda: Recipes.save_plan(self, title, text), True)
+
+    def shopping(self, name):
+        return self._run("add_to_shopping", {"name": name}, lambda: Recipes.shopping(self, name))
+
+
 def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
     """Build a store from a resolved seed: {tasks: {list: [..]}, events: [..],
     jobs: [..]}. A task is a title or {title, due, completed}; uids are opaque on
@@ -238,6 +301,7 @@ class EvalServer:
         self.clock = clock
         self.store = RecordingStore()
         self.notes_dir: str | None = None
+        self.recipes_dir: str | None = None
         self.url = ""
         self._server: uvicorn.Server | None = None
 
@@ -246,6 +310,7 @@ class EvalServer:
         os.environ.pop("PIM_TOOLS_TOKEN", None)
         app.dependency_overrides[get_store] = lambda: self.store
         app.dependency_overrides[get_notes] = lambda: self.store.notes
+        app.dependency_overrides[get_recipes] = lambda: self.store.recipes
         self.reset({})
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
@@ -268,8 +333,10 @@ class EvalServer:
             self._server.should_exit = True
         app.dependency_overrides.pop(get_store, None)
         app.dependency_overrides.pop(get_notes, None)
-        if self.notes_dir:
-            shutil.rmtree(self.notes_dir, ignore_errors=True)
+        app.dependency_overrides.pop(get_recipes, None)
+        for d in (self.notes_dir, self.recipes_dir):
+            if d:
+                shutil.rmtree(d, ignore_errors=True)
 
     def reset(self, seed: dict[str, Any]) -> RecordingStore:
         store = seeded_store(seed, self.clock)
@@ -281,5 +348,13 @@ class EvalServer:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
         store.notes = RecordingNotes(self.notes_dir, store.calls)
+        if self.recipes_dir:
+            shutil.rmtree(self.recipes_dir, ignore_errors=True)
+        self.recipes_dir = tempfile.mkdtemp(prefix="pim-eval-recipes-")
+        for name, text in (seed.get("recipes") or {}).items():
+            path = Path(self.recipes_dir, name + ".md")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        store.recipes = RecordingRecipes(self.recipes_dir, store.calls)
         self.store = store
         return self.store

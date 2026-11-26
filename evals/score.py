@@ -201,6 +201,19 @@ def score_case(
         for s in want.get("contains", []):
             if _norm(s) not in text:
                 reasons.append(f"state: note {want['name']} lacks {s!r}")
+    for want in state.get("file") or []:  # recipes folder files, by path without .md
+        root = store.recipes.root if hasattr(store, "recipes") else None
+        path = Path(root, want["path"] + ".md") if root else None
+        text = _norm(path.read_text()) if path and path.exists() else None
+        if text is None:
+            reasons.append(f"state: file {want['path']} is missing")
+            continue
+        for s in want.get("contains", []):
+            if _norm(s) not in text:
+                reasons.append(f"state: file {want['path']} lacks {s!r}")
+        for s in want.get("excludes", []):
+            if _norm(s) in text:
+                reasons.append(f"state: file {want['path']} still has {s!r}")
     if "events" in state and len(store.events) != state["events"]:
         reasons.append(f"state: {len(store.events)} events, expected {state['events']}")
 

@@ -28,6 +28,14 @@ TOOLS = {
     "list_notes",
     "read_note",
     "append_note",
+    "list_recipes",
+    "read_recipe",
+    "read_cooking_guide",
+    "add_recipe_note",
+    "change_recipe_text",
+    "set_recipe_tag",
+    "save_meal_plan",
+    "add_to_shopping",
 }
 
 
