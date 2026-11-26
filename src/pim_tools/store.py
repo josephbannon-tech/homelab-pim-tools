@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
-from .models import Event, Task
+from .models import CalendarInfo, Event, Task
 from .repeat import Job, describe, in_order, settle
 
 
@@ -44,8 +44,17 @@ class Store(Protocol):
         self, start: datetime, end: datetime, calendar: str | None = None
     ) -> list[Event]: ...
     def add_event(
-        self, title: str, start: datetime, end: datetime | None, notes: str | None
+        self,
+        title: str,
+        start: datetime,
+        end: datetime | None,
+        notes: str | None,
+        calendar: str | None = None,
     ) -> tuple[Event, bool]: ...
+    def calendars_info(self) -> list[CalendarInfo]: ...
+    def move_event(
+        self, calendar: str, uid: str, start: datetime, to_calendar: str, whole_series: bool
+    ) -> tuple[Event, str]: ...
     def change_event(
         self,
         calendar: str,
@@ -110,16 +119,37 @@ def _utc(dt: datetime) -> datetime:
     return _aware(dt).astimezone(UTC)
 
 
-def _wanted(calendar: str | None, known: tuple[str, ...]) -> tuple[str, ...]:
-    """Which calendars a read covers. None is the first (the appointments
-    calendar, also the only one written to); 'all' is every configured one."""
+def _wanted(
+    calendar: str | None, known: tuple[str, ...], background: tuple[str, ...] = ("routine",)
+) -> tuple[str, ...]:
+    """Which calendars a read covers. None is every appointment calendar (all
+    but the background ones, the daily routine); 'all' is every configured one."""
     if calendar is None:
-        return known[:1]
+        return tuple(c for c in known if c not in background) or known[:1]
     if calendar == "all":
         return known
     if calendar not in known:
         raise NotFound(calendar)
     return (calendar,)
+
+
+def _check_move(
+    calendar: str,
+    to_calendar: str,
+    known: tuple[str, ...],
+    background: tuple[str, ...],
+    series: bool,
+) -> None:
+    """A move goes between configured calendars. A whole routine series stays
+    put (the routine keeps one colour by design); one day of it may move."""
+    if to_calendar not in known:
+        raise NotFound(to_calendar)
+    if to_calendar == calendar:
+        raise Unsupported(f"the event is already on {calendar}")
+    if to_calendar in background:
+        raise Unsupported(f"events are not moved onto {to_calendar}")
+    if series and calendar in background:
+        raise Unsupported(f"a whole {calendar} series stays on {calendar}; move one day instead")
 
 
 # --------------------------------------------------------------------------- memory
@@ -130,6 +160,8 @@ class MemoryStore:
     tasks: dict[str, list[Task]] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
     calendars: tuple[str, ...] = ("personal", "routine")
+    colours: dict[str, str] = field(default_factory=dict)  # calendar -> #rrggbb
+    background: tuple[str, ...] = ("routine",)
     jobs: dict[str, Job] = field(default_factory=dict)  # repeating jobs, by task uid
     clock: Callable[[], datetime] = _now
 
@@ -199,7 +231,7 @@ class MemoryStore:
     def list_events(
         self, start: datetime, end: datetime, calendar: str | None = None
     ) -> list[Event]:
-        wanted = _wanted(calendar, self.calendars)
+        wanted = _wanted(calendar, self.calendars, self.background)
         start, end = _aware(start), _aware(end)
         out = [
             e
@@ -209,16 +241,63 @@ class MemoryStore:
         return sorted(out, key=lambda e: _aware(e.start))
 
     def add_event(
-        self, title: str, start: datetime, end: datetime | None, notes: str | None
+        self,
+        title: str,
+        start: datetime,
+        end: datetime | None,
+        notes: str | None,
+        calendar: str | None = None,
     ) -> tuple[Event, bool]:
+        target = calendar or self.calendars[0]
+        if target not in self.calendars:
+            raise NotFound(target)
+        if target in self.background:
+            raise Unsupported(f"new events do not go on {target}")
         start = _aware(start)
         end = _aware(end) if end else start + timedelta(hours=1)
         for e in self.events:
             if _norm(e.title) == _norm(title) and _aware(e.start) == start:
                 return e, False
-        e = Event(uid=str(uuid.uuid4()), title=title.strip(), start=start, end=end, notes=notes)
+        e = Event(
+            uid=str(uuid.uuid4()),
+            title=title.strip(),
+            start=start,
+            end=end,
+            notes=notes,
+            calendar=target,
+        )
         self.events.append(e)
         return e, True
+
+    def calendars_info(self) -> list[CalendarInfo]:
+        return [
+            CalendarInfo(
+                name=c,
+                colour=self.colours.get(c),
+                routine=c in self.background,
+                default=i == 0,
+            )
+            for i, c in enumerate(self.calendars)
+        ]
+
+    def move_event(
+        self, calendar: str, uid: str, start: datetime, to_calendar: str, whole_series: bool
+    ) -> tuple[Event, str]:
+        """Each stored Event is one day here; a series is the events sharing a uid."""
+        e = self._one(calendar, uid, start)
+        series = e.recurring and whole_series
+        _check_move(calendar, to_calendar, self.calendars, self.background, series)
+        if not e.recurring or series:
+            for other in self.events:
+                if other.uid == uid and other.calendar == calendar:
+                    other.calendar = to_calendar
+            return e, "every day of the series" if series else "this single event"
+        copy = e.model_copy(
+            update={"uid": str(uuid.uuid4()), "calendar": to_calendar, "recurring": False}
+        )
+        self.events.remove(e)
+        self.events.append(copy)
+        return copy, f"only {copy.start:%A %d %B}; the rest of the series stays on {calendar}"
 
     def _one(self, calendar: str, uid: str, start: datetime) -> Event:
         if calendar not in self.calendars:
@@ -271,6 +350,7 @@ class CalDAVStore:
         password: str,
         calendar: str = "personal",
         extra_calendars: tuple[str, ...] = (),
+        background: tuple[str, ...] = ("routine",),
     ):
         import caldav  # imported lazily so the API tests need no CalDAV stack
 
@@ -278,6 +358,7 @@ class CalDAVStore:
         self._principal = self._client.principal()
         self._event_calendar_name = calendar
         self._calendars = (calendar, *extra_calendars)
+        self._background = background
 
     # -- helpers
     def _calendar(self, name: str):
@@ -325,9 +406,21 @@ class CalDAVStore:
 
     # -- tasks
     def task_lists(self) -> list[str]:
-        """Every collection that is not an event calendar, by URL leaf."""
-        leaves = (str(c.url).rstrip("/").rsplit("/", 1)[-1] for c in self._principal.calendars())
-        return sorted(leaf for leaf in leaves if leaf not in self._calendars)
+        """Every collection that holds tasks and is not a configured event
+        calendar, by URL leaf. An event-only collection (a new calendar not yet
+        configured here) is not offered as a list."""
+        out = []
+        for c in self._principal.calendars():
+            leaf = str(c.url).rstrip("/").rsplit("/", 1)[-1]
+            if leaf in self._calendars:
+                continue
+            try:
+                comps = c.get_supported_components()
+            except Exception:  # a server that does not say: keep the old behaviour
+                comps = []
+            if not comps or "VTODO" in comps:
+                out.append(leaf)
+        return sorted(out)
 
     # -- repeating jobs: the interval and rank ride on the VTODO as X- properties
     @staticmethod
@@ -445,7 +538,7 @@ class CalDAVStore:
         self, start: datetime, end: datetime, calendar: str | None = None
     ) -> list[Event]:
         out: list[Event] = []
-        for name in _wanted(calendar, self._calendars):
+        for name in _wanted(calendar, self._calendars, self._background):
             found = self._calendar(name).search(
                 start=_aware(start), end=_aware(end), event=True, expand=True
             )
@@ -453,9 +546,19 @@ class CalDAVStore:
         return sorted(out, key=lambda e: e.start)
 
     def add_event(
-        self, title: str, start: datetime, end: datetime | None, notes: str | None
+        self,
+        title: str,
+        start: datetime,
+        end: datetime | None,
+        notes: str | None,
+        calendar: str | None = None,
     ) -> tuple[Event, bool]:
-        cal = self._calendar(self._event_calendar_name)
+        target = calendar or self._event_calendar_name
+        if target not in self._calendars:
+            raise NotFound(target)
+        if target in getattr(self, "_background", ()):
+            raise Unsupported(f"new events do not go on {target}")
+        cal = self._calendar(target)
         start = _utc(start)
         end = _utc(end) if end else start + timedelta(hours=1)
         for e in self.list_events(start - timedelta(minutes=1), start + timedelta(minutes=1)):
@@ -470,7 +573,26 @@ class CalDAVStore:
         if notes:
             kwargs["description"] = notes
         ev = cal.save_event(**kwargs)
-        return self._event_from(ev, self._event_calendar_name), True
+        return self._event_from(ev, target), True
+
+    def calendars_info(self) -> list[CalendarInfo]:
+        from caldav.elements import ical as ical_props
+
+        out = []
+        for i, name in enumerate(self._calendars):
+            try:
+                colour = self._calendar(name).get_property(ical_props.CalendarColor())
+            except Exception:
+                colour = None
+            out.append(
+                CalendarInfo(
+                    name=name,
+                    colour=str(colour)[:7] if colour else None,
+                    routine=name in self._background,
+                    default=i == 0,
+                )
+            )
+        return out
 
     # -- changing one event, or one day of a repeating one
     #
@@ -542,6 +664,59 @@ class CalDAVStore:
             notes=str(desc) if desc else None,
             calendar=calendar,
             recurring=recurring,
+        )
+
+    def _day_view(self, master, target, rid, calendar: str) -> Event:
+        """The event as it shows on that day."""
+        if target is not None:
+            return self._as_event(target, calendar, rid is not None)
+        length = self._as_event(master, calendar, True)
+        span = (length.end - length.start) if length.end else timedelta(hours=1)
+        return length.model_copy(update={"start": _aware(rid), "end": _aware(rid) + span})
+
+    def move_event(
+        self, calendar: str, uid: str, start: datetime, to_calendar: str, whole_series: bool
+    ) -> tuple[Event, str]:
+        """Move an event to another calendar (which sets its colour on the phone).
+        A single event or a whole series moves as one resource, keeping its uid:
+        written to the new calendar first, then deleted from the old, so a
+        failure in between leaves a duplicate, never a loss. One day of a series
+        becomes a single event on the new calendar and is skipped in the series."""
+        from caldav.lib import error as caldav_error
+
+        obj, ical, master, target, rid = self._locate(calendar, uid, start)
+        series = rid is not None and whole_series
+        _check_move(calendar, to_calendar, self._calendars, self._background, series)
+        dest = self._calendar(to_calendar)
+        day = self._day_view(master, target, rid, calendar)
+        if rid is None or series:
+            try:
+                dest.event_by_uid(uid)
+            except caldav_error.NotFoundError:
+                pass
+            else:
+                raise Unsupported(f"{to_calendar} already holds an event with this uid")
+            dest.save_event(ical.to_ical().decode())
+            obj.delete()
+            moved = day.model_copy(update={"calendar": to_calendar})
+            return moved, "every day of the series" if series else "this single event"
+        kwargs = {
+            "summary": day.title,
+            "dtstart": _utc(day.start),
+            "dtend": _utc(day.end or day.start + timedelta(hours=1)),
+            "uid": str(uuid.uuid4()),
+        }
+        if day.notes:
+            kwargs["description"] = day.notes
+        copy = dest.save_event(**kwargs)
+        try:
+            self.cancel_event(calendar, uid, start)
+        except Exception:
+            copy.delete()
+            raise
+        return (
+            self._event_from(copy, to_calendar),
+            f"only {day.start:%A %d %B}; the rest of the series stays on {calendar}",
         )
 
     def change_event(

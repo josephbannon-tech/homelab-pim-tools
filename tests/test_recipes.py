@@ -307,3 +307,24 @@ def test_recipes_off_without_a_folder():
 
     _default_recipes.cache_clear()
     assert TestClient(app).get("/recipes").status_code == 503
+
+
+def test_check_items_keep_their_amounts():
+    from pim_tools.recipes import shopping_items
+
+    text = (
+        "## Shopping\n\n- Lamb mince, 500 g\n\nCheck you have\n"
+        "- Basmati rice, 300 g\n- Garam masala, 1 tsp\n- sunflower oil, olive oil\n"
+        "- Fresh mint, ½ bunch\n- plain flour, cornflour, 2 tbsp\n"
+    )
+    got = shopping_items(text, "plan").items
+    assert got == [
+        "Lamb mince, 500 g",
+        "Check: Basmati rice, 300 g",
+        "Check: Garam masala, 1 tsp",
+        "Check: sunflower oil",
+        "Check: olive oil",
+        "Check: Fresh mint, ½ bunch",
+        "Check: plain flour",
+        "Check: cornflour, 2 tbsp",
+    ]

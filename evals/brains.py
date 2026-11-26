@@ -293,6 +293,19 @@ class OracleBrain:
                 httpx.get(f"{self.url}/notes/read", params=args).raise_for_status()
             elif tool == "append_note":
                 httpx.post(f"{self.url}/notes/append", json=args).raise_for_status()
+            elif tool == "list_calendars":
+                httpx.get(f"{self.url}/calendars").raise_for_status()
+            elif tool == "move_event":
+                at = datetime.fromisoformat(args["start"])
+                window = {
+                    "from": (at - timedelta(hours=1)).isoformat(),
+                    "to": (at + timedelta(hours=1)).isoformat(),
+                    "calendar": "all",
+                }
+                found = httpx.get(f"{self.url}/events", params=window).json()["events"]
+                ev = next(e for e in found if e["title"].casefold() == expect["event"].casefold())
+                body = {**args, "uid": ev["uid"], "start": ev["start"], "calendar": ev["calendar"]}
+                httpx.post(f"{self.url}/events/move", json=body).raise_for_status()
             elif tool in ("change_event", "cancel_event"):
                 at = datetime.fromisoformat(args["start"])
                 window = {

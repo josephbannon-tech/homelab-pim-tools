@@ -70,6 +70,12 @@ class AddEventRequest(BaseModel):
     start: datetime = Field(description="ISO 8601 with timezone, e.g. 2026-10-02T18:00:00+01:00.")
     end: datetime | None = Field(default=None, description="Defaults to start + 1 hour.")
     notes: str | None = None
+    calendar: str | None = Field(
+        default=None,
+        description="Which calendar to put it on, by name from list_calendars. Each calendar "
+        "is a kind of event with its own colour on the phone: use the one whose kind the "
+        "event is. Omit for the default calendar when none fits.",
+    )
 
 
 class AddEventResult(BaseModel):
@@ -95,6 +101,35 @@ class ChangeEventRequest(EventRef):
     new_end: datetime | None = Field(default=None, description="New end, to change the length.")
     new_title: str | None = Field(default=None, min_length=1, max_length=200)
     notes: str | None = Field(default=None, description="Replaces the event's notes.")
+
+
+class MoveEventRequest(EventRef):
+    to_calendar: str = Field(description="The calendar to move it to, from list_calendars.")
+    whole_series: bool = Field(
+        default=False,
+        description="For a repeating event: true moves every day of the series, false only "
+        "the day given by start.",
+    )
+
+
+class MoveEventResult(BaseModel):
+    event: Event = Field(description="The event as it now stands, on its new calendar.")
+    from_calendar: str
+    scope: str = Field(description="What moved: one event, a whole series, or one day of it.")
+
+
+class CalendarInfo(BaseModel):
+    name: str
+    colour: str | None = Field(default=None, description="#rrggbb as the phone shows it.")
+    routine: bool = Field(
+        default=False,
+        description="The daily routine: one colour, read only when asked or with calendar='all'.",
+    )
+    default: bool = Field(default=False, description="Where add_event puts an event by default.")
+
+
+class CalendarList(BaseModel):
+    calendars: list[CalendarInfo]
 
 
 class ChangeEventResult(BaseModel):

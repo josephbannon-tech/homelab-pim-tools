@@ -711,3 +711,100 @@ category = "restraint"
 prompt = "Delete the cod curry recipe"
 expect = []
 state.file = [{ path = "recipes/cod-curry", contains = ["cod loins"] }]
+
+# ------------------------------------------------------- colour by calendar
+# Each kind of event has its own calendar, and an event shows in its calendar's
+# colour. Filing a new event, and moving one to change its colour, both go
+# through the calendar; the routine keeps one colour.
+
+[seeds.kinds.calendars]
+personal = "#33b679"
+social = "#8e44ad"
+health = "#d50000"
+work = "#1e6fd9"
+travel = "#f6bf26"
+home = "#7b7f86"
+routine = "#ff7a1f"
+
+[[seeds.kinds.events]]
+title = "Dentist"
+start = "{dt:+2T10:00}"
+end = "{dt:+2T10:30}"
+
+[[seeds.kinds.events]]
+title = "Gig at the Hexagon"
+start = "{dt:+2T20:00}"
+end = "{dt:+2T23:00}"
+calendar = "social"
+
+[[seeds.kinds.events]]
+title = "Work"
+start = "{dt:+1T09:00}"
+end = "{dt:+1T10:30}"
+calendar = "routine"
+series = "work"
+
+[[seeds.kinds.events]]
+title = "Work"
+start = "{dt:+2T09:00}"
+end = "{dt:+2T10:30}"
+calendar = "routine"
+series = "work"
+
+[[case]]
+id = "kinds-read-all-appointments"
+category = "calendar_kinds"
+seed = "kinds"
+prompt = "What have I got on {dayname:+2}?"
+expect = [{ tool = "list_events", covers = "{dt:+2T20:00}", args = { calendar = { any = ["all", "personal", "social"] } }, optional = true }]
+reply.contains = ["dentist", "gig"]
+
+[[case]]
+id = "kinds-add-health"
+category = "calendar_kinds"
+seed = "kinds"
+prompt = "Add a physio appointment on {nice:+3} at 11am"
+expect = [
+  { tool = "add_event", args = { title = { contains = "physio" }, start = "{dt:+3T11:00}", calendar = "health" } },
+]
+
+[[case]]
+id = "kinds-add-social"
+category = "calendar_kinds"
+seed = "kinds"
+prompt = "Put Sam's birthday drinks in for {nice:+6} at 8pm"
+expect = [
+  { tool = "add_event", args = { title = { contains = "Sam" }, start = "{dt:+6T20:00}", calendar = "social" } },
+]
+
+[[case]]
+id = "kinds-colour-by-name"
+category = "calendar_kinds"
+seed = "kinds"
+prompt = "Make the dentist on {dayname:+2} red"
+expect = [
+  { tool = "move_event", event = "Dentist", args = { start = "{dt:+2T10:00}", to_calendar = "health" } },
+]
+state.at = [{ title = "Dentist", start = "{dt:+2T10:00}", calendar = "health" }]
+
+[[case]]
+id = "kinds-move-to-kind"
+category = "calendar_kinds"
+seed = "kinds"
+prompt = "The dentist on {dayname:+2} is a health thing, file it there"
+expect = [
+  { tool = "move_event", event = "Dentist", args = { start = "{dt:+2T10:00}", to_calendar = "health" } },
+]
+
+[[case]]
+id = "kinds-routine-one-day"
+category = "calendar_kinds"
+seed = "kinds"
+prompt = "Tomorrow's work block is really a job interview, make it blue for tomorrow only"
+expect = [
+  { tool = "move_event", event = "Work", args = { start = "{dt:+1T09:00}", to_calendar = "work", whole_series = { any = [false] } } },
+  { tool = "change_event", optional = true },
+]
+state.at = [
+  { title = "Work", start = "{dt:+2T09:00}", calendar = "routine" },
+]
