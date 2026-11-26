@@ -82,6 +82,9 @@ def test_function_schemas_stand_alone():
         "add_event",
         "change_event",
         "cancel_event",
+        "list_notes",
+        "read_note",
+        "append_note",
     }
     add = next(t for t in tools if t["function"]["name"] == "add_task")["function"]
     assert set(add["parameters"]["required"]) == {"list", "title"}

@@ -31,8 +31,9 @@ Exit status is the gate. A run passes when at least 90% of cases pass and no bad
 | `add_event` | 6 | 12 and 24 hour times, "half twelve", an end time, notes, a duplicate |
 | `list_events` | 5 | tomorrow, the next seven days, "am I free" on an empty morning, a routine block by name, a slot that only a routine block fills |
 | `change_event` | 5 | move one day of a repeating block and leave the others, shorten an appointment, add a note, cancel a single event, skip one day of a series |
+| `notes` | 3 | read a note, add a line to one, find the note that mentions something |
 | `repeating` | 3 | the jobs due now, which one comes first when a late job has climbed, ticking one off |
-| `restraint` | 5 | a change to a whole repeating series, an event that is not there, a request with no referent, a general question, a task title that contains an injected instruction |
+| `restraint` | 7 | a note that is not there, a private note it must not reveal, a change to a whole repeating series, an event that is not there, a request with no referent, a general question, a task title that contains an injected instruction |
 
 Cases live in [`cases.toml`](cases.toml), with the matcher syntax at the top of the file.
 
@@ -48,6 +49,8 @@ Scored runs, 2026-11-23, on the first 30 cases:
 | The same CPU model with a firmer system prompt | harness tool loop, REST door | 26/30 | 2 | 39.8 s | fail |
 
 Only Claude passes, so the model swap stays closed.
+
+v0.7.0 added notes (`list_notes`, `read_note`, `append_note`) with three cases and two under restraint. Claude on the 46 cases, 2026-11-24: 46 of 46, 0 bad writes, median 4.3 s.
 
 v0.6.0 added `change_event` and `cancel_event`, the first tools that can remove data, with five cases for them and two more under restraint (a whole-series change it must decline, an event that is not there). The old `refuse-no-delete-tool` case went, since cancelling is now a tool. Claude on the 41 cases, 2026-11-24: 41 of 41, 0 bad writes, median 4.0 s.
 
@@ -68,7 +71,7 @@ Full reports, with every recorded call and reply, are in [`results/`](results/).
 ## Limits
 
 - **A run is one sample.** Three Claude runs in one afternoon scored 29, 29 and 30, and the two failures were different cases. The 90% line leaves room for that; the bad-write line does not.
-- **The model path for local models is the harness's own tool loop.** It sends the same system prompt and the same seven operations as the production front end, but it is not Open WebUI's loop. A model that passes here still gets a short acceptance pass through the real front end before a swap.
+- **The model path for local models is the harness's own tool loop.** It sends the same system prompt and the same ten operations as the production front end, but it is not Open WebUI's loop. A model that passes here still gets a short acceptance pass through the real front end before a swap.
 - **Reply checks are phrase lists.** They catch a reply that names an item it should not, or never mentions the one it should. They do not judge tone. One case was widened after its first run because a correct refusal ("I couldn't cancel") was not on the list; the store-side checks have needed no such change.
 - **Calls rejected by request validation are not recorded.** They never reach the store, change nothing, and the model sees the error.
 - **CI runs the harness, not a model.** GitHub Actions cannot reach a private model endpoint. The test job proves every case is satisfiable (an oracle brain performs the expected calls and must pass every case) and that a rogue write trips the gate. Scored runs happen on the host that can reach the model, and the report is committed.
