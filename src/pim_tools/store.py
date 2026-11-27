@@ -76,6 +76,13 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+def _unescape(text: str) -> str:
+    """Undo TEXT escaping on an X- property. Radicale rewrites what it stores
+    and escapes the semicolons of an RRULE held in X-CHORE-ON (FREQ=YEARLY\\;
+    BYMONTH=8), and icalendar hands an unknown property back as written."""
+    return text.replace("\\;", ";").replace("\\,", ",").replace("\\\\", "\\")
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -454,7 +461,7 @@ class CalDAVStore:
             resets=str(vt.get("x-chore-resets")) if vt.get("x-chore-resets") else None,
             done_at=done_at,
             position=int(str(pos)) if pos is not None and str(pos).isdigit() else None,
-            on=str(vt.get("x-chore-on")) if vt.get("x-chore-on") else None,
+            on=_unescape(str(vt.get("x-chore-on"))) if vt.get("x-chore-on") else None,
         )
 
     @staticmethod
