@@ -158,6 +158,7 @@ end = "{dt:+5T19:30}"
 title = "Birthday dinner"
 start = "{dt:+9T19:00}"
 end = "{dt:+9T21:00}"
+location = "The Plough, Wootton"
 
 [[seed.events]]
 title = "Language practice"
@@ -373,6 +374,27 @@ expect = [
 ]
 state.events = 5
 
+# A place the user names goes in location (the phone links it to maps), not
+# in the notes or title; no place named, no location.
+
+[[case]]
+id = "add-event-place"
+category = "add_event"
+prompt = "Lunch with Grandad on {nice:+5} at 1pm at Steam in Swindon"
+expect = [
+  { tool = "add_event", args = { title = { contains = "Grandad" }, start = "{dt:+5T13:00}", location = { contains = "Steam" }, notes = { absent = true } } },
+]
+state.events = 6
+
+[[case]]
+id = "add-event-no-place"
+category = "add_event"
+prompt = "Add hairdresser on {dayname:+3} at 3pm"
+expect = [
+  { tool = "add_event", args = { title = { contains = "hairdresser" }, start = "{dt:+3T15:00}", location = { absent = true } } },
+]
+state.events = 6
+
 # ---------------------------------------------------------------- read events
 
 [[case]]
@@ -452,6 +474,22 @@ expect = [
 ]
 state.events = 5
 state.at = [{ title = "Boiler service", start = "{dt:+1T14:00}", end = "{dt:+1T15:00}" }]
+
+[[case]]
+id = "change-place"
+category = "change_event"
+prompt = "Tomorrow's boiler service is at 12 Elm Road now, put that as the location"
+expect = [
+  { tool = "change_event", event = "Boiler service", args = { start = "{dt:+1T14:00}", location = { contains = "12 Elm Road" } } },
+]
+state.events = 5
+
+[[case]]
+id = "list-event-place"
+category = "list_events"
+prompt = "Where's the birthday dinner?"
+expect = [{ tool = "list_events", covers = "{dt:+9T19:00}" }]
+reply.contains = ["Plough"]
 
 [[case]]
 id = "cancel-single-event"

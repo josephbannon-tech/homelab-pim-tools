@@ -50,6 +50,7 @@ class Store(Protocol):
         end: datetime | None,
         notes: str | None,
         calendar: str | None = None,
+        location: str | None = None,
     ) -> tuple[Event, bool]: ...
     def calendars_info(self) -> list[CalendarInfo]: ...
     def move_event(
@@ -64,8 +65,15 @@ class Store(Protocol):
         new_end: datetime | None,
         new_title: str | None,
         notes: str | None,
+        location: str | None = None,
     ) -> tuple[Event, bool]: ...
     def cancel_event(self, calendar: str, uid: str, start: datetime) -> Event: ...
+
+
+def _place(location: str | None) -> str | None:
+    """A location as stored: trimmed, and None when blank (an empty string on a
+    change clears it)."""
+    return (" ".join(location.split()) or None) if location else None
 
 
 def _norm(s: str) -> str:
@@ -261,6 +269,7 @@ class MemoryStore:
         end: datetime | None,
         notes: str | None,
         calendar: str | None = None,
+        location: str | None = None,
     ) -> tuple[Event, bool]:
         target = calendar or self.calendars[0]
         if target not in self.calendars:
@@ -278,6 +287,7 @@ class MemoryStore:
             start=start,
             end=end,
             notes=notes,
+            location=_place(location),
             calendar=target,
         )
         self.events.append(e)
@@ -331,16 +341,18 @@ class MemoryStore:
         new_end: datetime | None,
         new_title: str | None,
         notes: str | None,
+        location: str | None = None,
     ) -> tuple[Event, bool]:
         """Each stored Event is one day here, so a repeating series is several
         events sharing a uid and changing one never reaches the others."""
         e = self._one(calendar, uid, start)
         want = _changed_times(_aware(e.start), _aware(e.end or e.start), new_start, new_end)
-        before = (e.start, e.end, e.title, e.notes)
+        before = (e.start, e.end, e.title, e.notes, e.location)
         e.start, e.end = want
         e.title = new_title.strip() if new_title else e.title
         e.notes = notes if notes is not None else e.notes
-        return e, (e.start, e.end, e.title, e.notes) != before
+        e.location = _place(location) if location is not None else e.location
+        return e, (e.start, e.end, e.title, e.notes, e.location) != before
 
     def cancel_event(self, calendar: str, uid: str, start: datetime) -> Event:
         e = self._one(calendar, uid, start)
@@ -413,6 +425,7 @@ class CalDAVStore:
             start=_aware(start),
             end=_aware(end) if end else None,
             notes=str(desc) if desc else None,
+            location=str(ve.get("location")) if ve.get("location") else None,
             calendar=calendar,
             # an expanded search marks every day of a series with RECURRENCE-ID
             recurring="RECURRENCE-ID" in ve or "RRULE" in ve,
@@ -567,6 +580,7 @@ class CalDAVStore:
         end: datetime | None,
         notes: str | None,
         calendar: str | None = None,
+        location: str | None = None,
     ) -> tuple[Event, bool]:
         target = calendar or self._event_calendar_name
         if target not in self._calendars:
@@ -587,6 +601,8 @@ class CalDAVStore:
         }
         if notes:
             kwargs["description"] = notes
+        if _place(location):
+            kwargs["location"] = _place(location)
         ev = cal.save_event(**kwargs)
         return self._event_from(ev, target), True
 
@@ -677,6 +693,7 @@ class CalDAVStore:
             start=start,
             end=end,
             notes=str(desc) if desc else None,
+            location=str(ve.get("location")) if ve.get("location") else None,
             calendar=calendar,
             recurring=recurring,
         )
@@ -723,6 +740,8 @@ class CalDAVStore:
         }
         if day.notes:
             kwargs["description"] = day.notes
+        if day.location:
+            kwargs["location"] = day.location
         copy = dest.save_event(**kwargs)
         try:
             self.cancel_event(calendar, uid, start)
@@ -743,6 +762,7 @@ class CalDAVStore:
         new_end: datetime | None,
         new_title: str | None,
         notes: str | None,
+        location: str | None = None,
     ) -> tuple[Event, bool]:
         from icalendar import Event as VEvent
 
@@ -758,11 +778,13 @@ class CalDAVStore:
         want_start, want_end = _changed_times(now.start, now.end or now.start, new_start, new_end)
         want_title = new_title.strip() if new_title else now.title
         want_notes = notes if notes is not None else now.notes
-        if (want_start, want_end, want_title, want_notes) == (
+        want_place = _place(location) if location is not None else now.location
+        if (want_start, want_end, want_title, want_notes, want_place) == (
             now.start,
             now.end,
             now.title,
             now.notes,
+            now.location,
         ):
             return now, False
         if target is None:
@@ -781,6 +803,10 @@ class CalDAVStore:
         target.add("summary", want_title)
         if want_notes:
             target.add("description", want_notes)
+        if location is not None:  # otherwise what is there (or copied from the master) stays
+            target.pop("location", None)
+            if want_place:
+                target.add("location", want_place)
         obj.icalendar_instance = ical
         obj.save()
         return self._as_event(target, calendar, recurring), True

@@ -49,6 +49,7 @@ class Event(BaseModel):
     start: datetime
     end: datetime | None = None
     notes: str | None = None
+    location: str | None = Field(default=None, description="Where the event is.")
     calendar: str = Field(default="personal", description="Which calendar the event is on.")
     recurring: bool = Field(
         default=False,
@@ -70,6 +71,14 @@ class AddEventRequest(BaseModel):
     start: datetime = Field(description="ISO 8601 with timezone, e.g. 2026-10-02T18:00:00+01:00.")
     end: datetime | None = Field(default=None, description="Defaults to start + 1 hour.")
     notes: str | None = None
+    location: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Where it is, when the user says: the place or address in their words, "
+        "e.g. 'Steam, Swindon'. The phone shows it as a link to the maps app. Put the place "
+        "here, not in notes or the title. Never look one up or guess one: omit it when the "
+        "user names no place.",
+    )
     calendar: str | None = Field(
         default=None,
         description="Which calendar to put it on, by name from list_calendars. Each calendar "
@@ -101,6 +110,11 @@ class ChangeEventRequest(EventRef):
     new_end: datetime | None = Field(default=None, description="New end, to change the length.")
     new_title: str | None = Field(default=None, min_length=1, max_length=200)
     notes: str | None = Field(default=None, description="Replaces the event's notes.")
+    location: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Replaces where the event is, in the user's words. Omit to keep it.",
+    )
 
 
 class MoveEventRequest(EventRef):
