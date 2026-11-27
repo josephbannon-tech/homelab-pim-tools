@@ -147,3 +147,27 @@ def test_a_birthday_among_chores(world):
     client.post("/tasks/complete", json={"list": "chores", "uid": card.uid})
     assert not any(t.startswith("Card/present") for t in titles(client))
     assert store.jobs[card.uid].due == local(2028, 8, 6)
+
+
+def test_it_is_read_as_radicale_stores_it():
+    """Radicale escapes the semicolons of the rule when it rewrites the file
+    (seen live 2026-11-27); a tick on the escaped rule raised ValueError."""
+    from icalendar import Calendar
+
+    raw = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\nBEGIN:VTODO\r\n"
+        "UID:chore-bday-james-w@homelab\r\nSUMMARY:Card/present: James W (13 Aug)\r\n"
+        "DTSTART:20270805T230000Z\r\nSTATUS:COMPLETED\r\nCOMPLETED:20270810T090000Z\r\n"
+        "X-CHORE-DUE:20270805T230000Z\r\nX-CHORE-EVERY:P7D\r\n"
+        "X-CHORE-ON:FREQ=YEARLY\;BYMONTH=8\;BYMONTHDAY=13\r\nX-CHORE-RANK:20\r\n"
+        "END:VTODO\r\nEND:VCALENDAR\r\n"
+    )
+
+    class Fake:
+        icalendar_component = Calendar.from_ical(raw).walk("VTODO")[0]
+
+    job = CalDAVStore._job_from(Fake(), datetime(2027, 8, 10, 9, tzinfo=UTC))
+    assert job.on == JAMES
+    assert describe(job, []) == "every year on 13 August, shown 7 days before"
+    settle([job], job.done_at)
+    assert job.due == local(2028, 8, 6)
