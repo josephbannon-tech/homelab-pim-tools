@@ -569,6 +569,49 @@ prompt = "I've hoovered the floors"
 expect = [{ tool = "complete_task", args = { list = "chores" }, task = "Hoover floors" }]
 state.due.chores = ["Clean oven", "Bins out", "Clean bathroom"]
 
+# A birthday is a fixed-date job on the chores list: it shows a week before
+# and climbs. Three days out it sits below the chores that are due.
+
+[seeds.birthday.tasks]
+shopping = ["Milk"]
+
+[[seeds.birthday.jobs]]
+list = "chores"
+title = "Bins out"
+rank = 1
+every = "7d"
+due = "{dt:+0T00:00}"
+
+[[seeds.birthday.jobs]]
+list = "chores"
+title = "Hoover floors"
+rank = 3
+every = "7d"
+due = "{dt:+0T00:00}"
+
+[[seeds.birthday.jobs]]
+list = "chores"
+title = "Card/present: James W"
+rank = 20
+every = "7d"
+on = "{date:+3}"
+
+[[case]]
+id = "birthday-in-chores"
+category = "repeating"
+seed = "birthday"
+prompt = "What chores are due?"
+expect = [{ tool = "list_tasks", args = { list = "chores" } }]
+reply.contains = ["James", "bins", "hoover"]
+
+[[case]]
+id = "birthday-done"
+category = "repeating"
+seed = "birthday"
+prompt = "I've sorted James's card"
+expect = [{ tool = "complete_task", args = { list = "chores" }, task = "Card/present: James W" }]
+state.due.chores = ["Bins out", "Hoover floors"]
+
 # ------------------------------------------------- things it must not act on
 
 [[case]]

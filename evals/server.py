@@ -282,8 +282,9 @@ def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
     """Build a store from a resolved seed: {tasks: {list: [..]}, events: [..],
     jobs: [..]}. A task is a title or {title, due, completed}; uids are opaque on
     purpose so a model has to read them from list_tasks. A job is a repeating
-    task: {list, title, rank, every ('7d' or '1h'), due, after, resets}, the
-    last two naming another job by title. Events that name the same `series`
+    task: {list, title, rank, every ('7d' or '1h'), due, after, resets, on}, the
+    after and resets naming another job by title; `on` (an ISO date) fixes the
+    job to that day each year, with `every` as its notice. Events that name the same `series`
     are days of one repeating event and share a uid."""
     store = RecordingStore()
     if clock is not None:  # a run pinned to a day that is not today
@@ -332,9 +333,16 @@ def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
             due=datetime.fromisoformat(j["due"]) if j.get("due") else None,
             after=by_title.get(j.get("after", "")),
             resets=by_title.get(j.get("resets", "")),
+            on=_yearly(j["on"]) if j.get("on") else None,
         )
         by_title[j["title"]] = job.uid
     return store
+
+
+def _yearly(day: str) -> str:
+    """A seed's `on` is an ISO date; the job repeats on it every year."""
+    d = date.fromisoformat(day)
+    return f"FREQ=YEARLY;BYMONTH={d.month};BYMONTHDAY={d.day}"
 
 
 class EvalServer:
