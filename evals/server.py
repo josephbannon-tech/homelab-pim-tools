@@ -121,6 +121,7 @@ class RecordingStore(MemoryStore):
         end: datetime | None,
         notes: str | None,
         calendar: str | None = None,
+        location: str | None = None,
     ) -> tuple[Event, bool]:
         call = self._record(
             "add_event",
@@ -130,10 +131,11 @@ class RecordingStore(MemoryStore):
                 "end": end,
                 "notes": notes,
                 "calendar": calendar or self.calendars[0],
+                "location": location,
             },
         )
         try:
-            event, created = super().add_event(title, start, end, notes, calendar)
+            event, created = super().add_event(title, start, end, notes, calendar, location)
         except NotFound:
             call.ok = False
             raise
@@ -163,7 +165,9 @@ class RecordingStore(MemoryStore):
         call.changed = True
         return out
 
-    def change_event(self, calendar, uid, start, new_start, new_end, new_title, notes):
+    def change_event(
+        self, calendar, uid, start, new_start, new_end, new_title, notes, location=None
+    ):
         call = self._record(
             "change_event",
             {
@@ -174,11 +178,12 @@ class RecordingStore(MemoryStore):
                 "new_end": new_end,
                 "new_title": new_title,
                 "notes": notes,
+                "location": location,
             },
         )
         try:
             event, changed = super().change_event(
-                calendar, uid, start, new_start, new_end, new_title, notes
+                calendar, uid, start, new_start, new_end, new_title, notes, location
             )
         except Exception:
             call.ok = False
@@ -319,6 +324,7 @@ def seeded_store(seed: dict[str, Any], clock=None) -> RecordingStore:
                 start=datetime.fromisoformat(ev["start"]),
                 end=datetime.fromisoformat(ev["end"]) if ev.get("end") else None,
                 notes=ev.get("notes"),
+                location=ev.get("location"),
                 calendar=ev.get("calendar", "personal"),
             )
         )

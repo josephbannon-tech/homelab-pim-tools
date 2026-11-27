@@ -159,7 +159,7 @@ def test_it_is_read_as_radicale_stores_it():
         "UID:chore-bday-james-w@homelab\r\nSUMMARY:Card/present: James W (13 Aug)\r\n"
         "DTSTART:20270805T230000Z\r\nSTATUS:COMPLETED\r\nCOMPLETED:20270810T090000Z\r\n"
         "X-CHORE-DUE:20270805T230000Z\r\nX-CHORE-EVERY:P7D\r\n"
-        "X-CHORE-ON:FREQ=YEARLY\;BYMONTH=8\;BYMONTHDAY=13\r\nX-CHORE-RANK:20\r\n"
+        "X-CHORE-ON:FREQ=YEARLY\\;BYMONTH=8\\;BYMONTHDAY=13\r\nX-CHORE-RANK:20\r\n"
         "END:VTODO\r\nEND:VCALENDAR\r\n"
     )
 

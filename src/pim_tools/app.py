@@ -280,7 +280,8 @@ def list_events(
         "later. Calendars other than the default are named for kinds of event, each with "
         "its own colour (list_calendars): when the event plainly is one of those kinds (a "
         "birthday is social, a dentist is health), put it on that calendar; otherwise omit "
-        "calendar for the default. Idempotent on (title, start)."
+        "calendar for the default. When the user says where it is, give location (the phone "
+        "links it to the maps app). Idempotent on (title, start)."
     ),
     response_model=AddEventResult,
 )
@@ -288,7 +289,9 @@ def add_event(req: AddEventRequest, store: Store = Depends(get_store)) -> AddEve
     if req.end and req.end <= req.start:
         raise HTTPException(422, "end must be after start")
     try:
-        event, created = store.add_event(req.title, req.start, req.end, req.notes, req.calendar)
+        event, created = store.add_event(
+            req.title, req.start, req.end, req.notes, req.calendar, req.location
+        )
     except NotFound as e:
         raise _no_such_calendar(e, store) from e
     except Unsupported as e:
@@ -342,12 +345,12 @@ def _no_such_event(ref: EventRef, e: NotFound) -> HTTPException:
     "/events/change",
     tags=["calendar"],
     operation_id="change_event",
-    summary="Change the time, title or notes of one event",
+    summary="Change the time, title, notes or location of one event",
     description=(
         "Changes one event. Identify it by the uid, start and calendar that list_events "
         "returned. For a repeating event (recurring=true) this changes that one day only. "
         "Give new_start to move it (the length is kept), new_end to change its length, "
-        "new_title or notes to reword it. " + _SERIES
+        "new_title or notes to reword it, location to change where it is. " + _SERIES
     ),
     response_model=ChangeEventResult,
 )
@@ -357,11 +360,21 @@ def change_event(req: ChangeEventRequest, store: Store = Depends(get_store)) -> 
         and req.new_end is None
         and req.new_title is None
         and req.notes is None
+        and req.location is None
     ):
-        raise HTTPException(422, "nothing to change: give new_start, new_end, new_title or notes")
+        raise HTTPException(
+            422, "nothing to change: give new_start, new_end, new_title, notes or location"
+        )
     try:
         event, changed = store.change_event(
-            req.calendar, req.uid, req.start, req.new_start, req.new_end, req.new_title, req.notes
+            req.calendar,
+            req.uid,
+            req.start,
+            req.new_start,
+            req.new_end,
+            req.new_title,
+            req.notes,
+            req.location,
         )
     except NotFound as e:
         raise _no_such_event(req, e) from e
