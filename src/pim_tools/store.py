@@ -177,13 +177,20 @@ class MemoryStore:
         due: datetime | None = None,
         after: str | None = None,
         resets: str | None = None,
+        on: str | None = None,
     ) -> Job:
         """Seed a repeating job (tests and evals; production jobs are loaded
-        into the CalDAV server directly)."""
-        from .repeat import WAITING
+        into the CalDAV server directly). A job with `on` is fixed to those
+        dates and `every` is its notice."""
+        from .repeat import WAITING, first_due
 
-        start = due or (WAITING if after else self.clock())
-        job = Job(str(uuid.uuid4()), title, rank, every, _aware(start), after, resets)
+        job = Job(str(uuid.uuid4()), title, rank, every, self.clock(), after, resets, on=on)
+        if due is not None:
+            job.due = _aware(due)
+        elif on:
+            job.due = first_due(job, self.clock())
+        elif after:
+            job.due = WAITING
         self.tasks.setdefault(list_name, []).append(Task(uid=job.uid, list=list_name, title=title))
         self.jobs[job.uid] = job
         return job
@@ -447,6 +454,7 @@ class CalDAVStore:
             resets=str(vt.get("x-chore-resets")) if vt.get("x-chore-resets") else None,
             done_at=done_at,
             position=int(str(pos)) if pos is not None and str(pos).isdigit() else None,
+            on=str(vt.get("x-chore-on")) if vt.get("x-chore-on") else None,
         )
 
     @staticmethod
